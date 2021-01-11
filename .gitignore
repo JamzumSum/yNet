@@ -1,3 +1,7 @@
+.vscode
+
 /tmp
+/doc
 /data
-!/data/*.zip
+
+__pycache__
