@@ -31,10 +31,10 @@ class ConvStack2(nn.Sequential, NeedShape):
             nn.ReLU()
         )
         NeedShape.__init__(self, ic, ih, iw)
-        self.__osp__ = (oc, ih, iw)
+        self._osp = (oc, ih, iw)
 
     @property
-    def oshape(self): return self.__osp__
+    def oshape(self): return self._osp
 
 class DownConv(nn.Conv2d, NeedShape):
     '''
@@ -42,11 +42,11 @@ class DownConv(nn.Conv2d, NeedShape):
     '''
     def __init__(self, ic, ih, iw):
         nn.Conv2d.__init__(self, ic, ic, 1, 2)
-        self.__osp__ = (ic, ih // 2, iw //2)
+        self._osp = (ic, ih // 2, iw //2)
         NeedShape.__init__(self, ic, ih, iw)
 
     @property
-    def oshape(self): return self.__osp__
+    def oshape(self): return self._osp
 
 class UpConv(nn.Sequential, NeedShape):
     '''
@@ -61,10 +61,10 @@ class UpConv(nn.Sequential, NeedShape):
         )
         self.BN = nn.BatchNorm2d(ic // 2)
         NeedShape.__init__(self, ic, ih, iw)
-        self.__osp__ = (ic //2, ih * 2, iw * 2)
+        self._osp = (ic //2, ih * 2, iw * 2)
 
     @property
-    def oshape(self): return self.__osp__
+    def oshape(self): return self._osp
 
 
 class UNet(nn.Module, NeedShape):
@@ -94,11 +94,11 @@ class UNet(nn.Module, NeedShape):
             self.add_module('U%d' % (i + 1), usample)
             self.add_module('L%d' % (i + 6), conv)
         
-        self.__osp__ = (oc, *cshape[-2:])
+        self._osp = (oc, *cshape[-2:])
         self.DW = nn.Conv2d(64, oc, 1)
 
     @property
-    def oshape(self): return self.__osp__
+    def oshape(self): return self._osp
 
     def cropCat(self, X, Y):
         '''

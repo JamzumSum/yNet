@@ -1,0 +1,28 @@
+model:      # model constructor
+  ishape:
+    - 3
+    - 512
+    - 512
+  K: 6     # 2, 3, 4a, 4b, 4c, 5
+  patch_size: 32
+training:  # training strategy
+  continue: True
+  load_from: latest
+  max_epoch: 100
+  use_unannotated_from: 30  # epoch
+optimizer:
+  SGD:
+dataloader:
+  annotated:
+    batch_size: 16
+    shuffle: True
+    drop_last: True
+  unannotated:
+    batch_size: 16
+    shuffle: True
+  scoring:
+    batch_size: 64    # extract 64 data to validate
+    shuffle: True
+paths:
+  model_dir: model/toynetv1/SGD
+  log_dir: model/toynetv1/SGD

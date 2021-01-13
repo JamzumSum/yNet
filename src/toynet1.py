@@ -29,7 +29,7 @@ class BIRADsUNet(UNet):
         return Mhead, Bhead
 
 class ToyNetV1(nn.Module):
-    def __init__(self, ishape, K, patch_size, a=1):
+    def __init__(self, ishape, K, patch_size, a=1.):
         nn.Module.__init__(self)
         self.backbone = BIRADsUNet(*ishape, K)
         self.pooling = nn.AvgPool2d(patch_size)
@@ -59,10 +59,15 @@ class ToyNetV1(nn.Module):
         Ym: [N], long
         Ybirad: [N], long
         '''
-        _, _, Mp, Bp = self.forward(X)      # ToyNetV1 discards two CAMs
+        M, B, Mp, Bp = self.forward(X)      # ToyNetV1 discards two CAMs
         Mloss = F.cross_entropy(Mp, Ym)
         Bloss = F.cross_entropy(Bp, Ybirad)
-        return Mloss + self.a * Bloss
+        return Mloss + self.a * Bloss, {
+            'malignant entropy': Mloss.detach(), 
+            'BIRADs entropy': Bloss.detach(), 
+            'malignant CAM': M.detach(), 
+            'BIRADs CAM': B.detach()
+        }
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)
