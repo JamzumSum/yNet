@@ -15,7 +15,7 @@ class Annotated(TensorDataset):
     '''
     def __init__(self):
         d = torch.load('./data/BIRADs/annotated.pt')
-        TensorDataset.__init__(self, d['X'], d['Ym'], d['Ybirad'])
+        TensorDataset.__init__(self, d['X'], d['Ym'].long(), d['Ybirad'].long())
         self.cls_name = d['cls_name']
 
 class Unannotated(TensorDataset):
@@ -26,7 +26,7 @@ class Unannotated(TensorDataset):
     '''
     def __init__(self):
         d = torch.load('./data/BIRADs/unannotated.pt')
-        TensorDataset.__init__(self, d['X'], d['Ym'])
+        TensorDataset.__init__(self, d['X'], d['Ym'].long())
 
 def trainValidSplit(t, v):
     '''

@@ -24,6 +24,7 @@ class ToyNetTrainer(Trainer):
             print(e)
             print('Trainer exits before iteration starts.')
             return
+        self.prepareBoard()
 
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             bar = Bar('epoch %2d(A)' % self.cur_epoch, max=len(anno))
@@ -64,12 +65,19 @@ class ToyNetTrainer(Trainer):
         sloader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
         d = next(iter(sloader))
         with torch.no_grad(): 
-            _, _, Mp, Bp = self.net(d[0])
+            M, B, Mp, Bp = self.net(*d[0])          # NOTE: Bp is not softmax-ed
             macc = F.l1_loss(Mp.squeeze(-1), d[1])
-            self.board.add_scalar(caption + '/malignant accuracy', macc, self.cur_epoch)
+            self.board.add_scalar(caption + '/accuracy/malignant', macc, self.cur_epoch)
+            self.board.add_image(caption + '/CAM/origin', d[0][0], self.cur_epoch)  # [3, H, W]
+            self.board.add_image(caption + '/CAM/malignant', M[0], self.cur_epoch)  # [1, H, W]
             if len(d) == 2: return
         
-            bacc = torch.argmax(Bp, -1) == d[2]
+            bacc = torch.argmax(Bp, -1) == d[2] # but argmax is enough :D
             bacc = bacc.float().mean()
-            self.board.add_scalar(caption + '/BIRADs accuracy', bacc, self.cur_epoch)
+            self.board.add_scalar(caption + '/accuracy/BIRADs', bacc, self.cur_epoch)
+            self.board.add_image(
+                caption + '/CAM/BIRADs', 
+                B[0, torch.argmax(Bp[0], -1)],  # [H, W]
+                self.cur_epoch, 'HW'
+            )
             return bacc

@@ -7,7 +7,9 @@ A toy implement for classifying benign/malignant and BIRADs
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from common.unet import UNet
+
 
 class BIRADsUNet(UNet):
     '''
@@ -50,7 +52,7 @@ class ToyNetV1(nn.Module):
 
         Mp = torch.amax(Mpatches, dim=(2, 3))        # [N, 1]
         Bp = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
-        Bp = torch.softmax(Bp, -1)
+        # Bp = torch.softmax(Bp, -1)        # NOTE: CANNOT use softmax here for crossentropy in torch applies softmax itself
         return Mhead, Bhead, Mp, Bp
 
     def loss(self, X, Ym, Ybirad):
@@ -59,9 +61,9 @@ class ToyNetV1(nn.Module):
         Ym: [N], long
         Ybirad: [N], long
         '''
-        M, B, Mp, Bp = self.forward(X)      # ToyNetV1 discards two CAMs
-        Mloss = F.cross_entropy(Mp, Ym)
-        Bloss = F.cross_entropy(Bp, Ybirad)
+        M, B, Pm, Pb = self.forward(X)      # ToyNetV1 discards two CAMs
+        Mloss = F.cross_entropy(torch.cat([1 - Pm, Pm], dim=-1), Ym)    # use [N, 2] to cal. CE
+        Bloss = F.cross_entropy(Pb, Ybirad)
         return Mloss + self.a * Bloss, {
             'malignant entropy': Mloss.detach(), 
             'BIRADs entropy': Bloss.detach(), 
@@ -75,5 +77,5 @@ if __name__ == "__main__":
         (1, 572, 572), 
         5, 12
     )
-    loss = toy.loss(x, torch.zeros(2, dtype=torch.long), torch.ones(2, dtype=torch.long))
+    loss, _ = toy.loss(x, torch.zeros(2, dtype=torch.long), torch.ones(2, dtype=torch.long))
     loss.backward()

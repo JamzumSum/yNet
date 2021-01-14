@@ -6,7 +6,7 @@ Make use of the CAMs.
 * create: 2021-1-11
 '''
 
-from toynet1 import ToyNetV1
+from toynetv1 import ToyNetV1
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,16 +35,16 @@ class ToyNetV2(ToyNetV1):
         self.Q = JointEstimator(K)
         self.b = b
 
-    def loss(self, X, Ym, Ybirad, piter=0.):
+    def loss(self, X, Ym, Yb, piter=0.):
         '''
         X: [N, 1, H, W]
         Ym: [N], long
-        Ybirad: [N], long
+        Yb: [N], long
         piter: current iter times / total iter times
         '''
-        M, B, Mp, Bp = self.forward(X)
-        Mloss = F.cross_entropy(Mp, Ym)
-        Bloss = F.cross_entropy(Bp, Ybirad)
+        M, B, Pm, Pb = self.forward(X)
+        Mloss = F.cross_entropy(torch.cat([1 - Pm, Pm], dim=-1), Ym)
+        Bloss = F.cross_entropy(Pb, Yb)
         
         Qpos = self.Q(M, B)        # [N, K, H, W]
         Qneg = B - Qpos

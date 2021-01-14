@@ -13,7 +13,7 @@ training:  # training strategy
   use_unannotated_from: 30  # epoch
 optimizer:
   Adam:
-    lr: 5e-4
+    lr: 0.0005
 dataloader:
   annotated:
     batch_size: 16
@@ -26,5 +26,5 @@ dataloader:
     batch_size: 64    # extract 64 data to validate
     shuffle: True
 paths:
-  model_dir: model/toynetv1/SGD
-  log_dir: model/toynetv1/SGD
+  model_dir: model/toynetv1/Adam
+  log_dir: log/toynetv1/Adam

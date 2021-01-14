@@ -3,10 +3,10 @@ from dataloader import trainValidSplit
 import yaml
 
 (ta, tu), (va, vu) = trainValidSplit(8, 2)
-print('annotated train set:', ta.shape[0])
-print('unannotated train set:', tu.shape[0])
-print('annotated validation set:', va.shape[0])
-print('unannotated validation set:', vu.shape[0])
+print('annotated train set:', len(ta))
+print('unannotated train set:', len(tu))
+print('annotated validation set:', len(va))
+print('unannotated validation set:', len(vu))
 
 conf = {}
 with open('./config/toynetv1.yml') as f: conf = yaml.safe_load(f)

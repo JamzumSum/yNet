@@ -14,6 +14,7 @@ class Trainer:
     cur_epoch = 0
     total_batch = 0
     best_mark = 0.
+    board = None
 
     def __init__(self, Net: torch.nn.Module, conf: dict):
         self.cls_name = Net.__name__
@@ -26,14 +27,13 @@ class Trainer:
         self.model_conf = conf.get('model', {})
 
         try:
-            if not self.load(self.training.get('name', '')):
+            if not self.load(self.model_dir):
                 self.net = Net(**self.model_conf)
         except ValueError as e:
             print(e)
             print('Trainer stopped.')
             return
         self.net.to(self.device)
-        self.board = SummaryWriter(self.log_dir)
 
     def __del__(self):
         if hasattr(self, 'board') and self.board: self.board.close()
@@ -62,7 +62,7 @@ class Trainer:
         if not os.path.exists(self.model_dir): os.mkdir(self.model_dir)
         torch.save(
             (self.net, self.conf, vconf, score), 
-            os.path.join(self.paths.get(), name + '.pt')
+            os.path.join(self.log_dir, name + '.pt')
         )
     
     def load(self, name):
@@ -87,10 +87,13 @@ class Trainer:
             raise ValueError('Model args have been changed')
         self.conf = newConf     # TODO
 
-    
+    def prepareBoard(self):
+        '''fxxk tensorboard spoil the log so LAZY LOAD it'''
+        if self.board is None: self.board = SummaryWriter(self.log_dir)
+        
     def logSummary(self, summary: dict, step=None):
         self.board.add_scalars('training', summary, step)
 
     def getOptimizer(self):
-        for k, v in self.op_conf: return getattr(torch.optim, k)(self.net.parameters(), **v, )
+        for k, v in self.op_conf.items(): return getattr(torch.optim, k)(self.net.parameters(), **v)
         raise ValueError('Optimizer is not specified.')
