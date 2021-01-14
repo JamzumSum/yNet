@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from common.trainer import Trainer
 from common.utils import KeyboardInterruptWrapper
-from toynet2 import ToyNetV1, ToyNetV2
+from toynetv2 import ToyNetV1, ToyNetV2
 
 class ToyNetTrainer(Trainer):
     @KeyboardInterruptWrapper(lambda self: print('Training resumed. Start from epoch%d next time.' % self.cur_epoch))

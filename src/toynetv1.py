@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from common.unet import UNet
 
-
+assert hasattr(torch, 'amax')   # make sure amax is supported
 class BIRADsUNet(UNet):
     '''
     [N, 1, H, W] -> [N, 1, H, W], [N, K, H, W]

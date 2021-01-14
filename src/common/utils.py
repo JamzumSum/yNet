@@ -2,14 +2,14 @@ from functools import wraps
 
 class KeyboardInterruptWrapper:
     def __init__(self, solution):
-        self.s = solution
+        self._s = solution
 
     def __call__(this, func):
         @wraps(func)
         def wrapped(self, *args, **kwargs):
             try: return func(self, *args, **kwargs)
             except KeyboardInterrupt:
-                this.s(self)
+                this._s(self)
         return wrapped
 
 def cal_parameters(model):
@@ -22,7 +22,7 @@ def cal_parameters(model):
     num_para = 0
     type_size = 1  ##如果是浮点数就是4
     
-    for index, (key, w_variable) in enumerate(model.named_parameters()):
+    for key, w_variable in model.named_parameters():
         if len(key) <= 30: 
             key = key + (30-len(key)) * blank
         shape = str(w_variable.shape)

@@ -26,9 +26,8 @@ class Trainer:
         self.dataloader = conf.get('dataloader', {})
         self.model_conf = conf.get('model', {})
 
-        try:
-            if not self.load(self.model_dir):
-                self.net = Net(**self.model_conf)
+        self.net = Net(**self.model_conf)
+        try: self.load(self.model_dir)
         except ValueError as e:
             print(e)
             print('Trainer stopped.')
@@ -61,7 +60,7 @@ class Trainer:
 
         if not os.path.exists(self.model_dir): os.mkdir(self.model_dir)
         torch.save(
-            (self.net, self.conf, vconf, score), 
+            (self.net.state_dict(), self.conf, vconf, score), 
             os.path.join(self.log_dir, name + '.pt')
         )
     
@@ -74,9 +73,10 @@ class Trainer:
             print('%s not exist. Start new training.' % path)
             return
 
-        self.net, newconf, vonf, score = self.torch.load(path)
+        state, newconf, vonf, score = self.torch.load(path)
 
         print(score)
+        self.net.load_state_dict(state)
         self.solveConflict(newconf)
 
         for k, v in vonf.items(): setattr(self, k, v)
