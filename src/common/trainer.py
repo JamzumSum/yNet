@@ -9,9 +9,11 @@ import os
 import torch
 from tensorboardX import SummaryWriter
 
+
 class Trainer:
     cur_epoch = 0
     total_batch = 0
+    best_mark = 0.
 
     def __init__(self, Net: torch.nn.Module, conf: dict):
         self.cls_name = Net.__name__
@@ -30,7 +32,7 @@ class Trainer:
             print(e)
             print('Trainer stopped.')
             return
-
+        self.net.to(self.device)
         self.board = SummaryWriter(self.log_dir)
 
     def __del__(self):
@@ -42,7 +44,10 @@ class Trainer:
     @property
     def log_dir(self):
         return self.paths.get('log_dir', os.path.join('log', self.cls_name))
-
+    
+    @property
+    def device(self):
+        return torch.device(self.training.get('device', 'cpu'))
     @property
     def max_epoch(self):
         return self.training.get('max_epoch', 1)
@@ -50,7 +55,8 @@ class Trainer:
     def save(self, name, score=None):
         vconf = {
             'cur_epoch': self.cur_epoch, 
-            'total_batch': self.total_batch
+            'total_batch': self.total_batch, 
+            'best_mark': score if score else self.best_mark
         }
 
         if not os.path.exists(self.model_dir): os.mkdir(self.model_dir)
@@ -84,3 +90,7 @@ class Trainer:
     
     def logSummary(self, summary: dict, step=None):
         self.board.add_scalars('training', summary, step)
+
+    def getOptimizer(self):
+        for k, v in self.op_conf: return getattr(torch.optim, k)(self.net.parameters(), **v, )
+        raise ValueError('Optimizer is not specified.')
