@@ -13,7 +13,7 @@ from tensorboardX import SummaryWriter
 class Trainer:
     cur_epoch = 0
     total_batch = 0
-    best_mark = 0.
+    best_mark = 1.
     board = None
 
     def __init__(self, Net: torch.nn.Module, conf: dict):
@@ -61,7 +61,7 @@ class Trainer:
         if not os.path.exists(self.model_dir): os.mkdir(self.model_dir)
         torch.save(
             (self.net.state_dict(), self.conf, vconf, score), 
-            os.path.join(self.log_dir, name + '.pt')
+            os.path.join(self.model_dir, name + '.pt')
         )
     
     def load(self, name):
@@ -92,7 +92,7 @@ class Trainer:
         if self.board is None: self.board = SummaryWriter(self.log_dir)
         
     def logSummary(self, summary: dict, step=None):
-        self.board.add_scalars('training', summary, step)
+        self.board.add_scalars('summary', summary, step)
 
     def getOptimizer(self):
         for k, v in self.op_conf.items(): return getattr(torch.optim, k)(self.net.parameters(), **v)

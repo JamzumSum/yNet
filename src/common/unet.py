@@ -69,13 +69,13 @@ class UpConv(nn.Sequential, NeedShape):
 
 class UNet(nn.Module, NeedShape):
     '''
-    [N, ic, H, W] -> [N, 64, H, W], [N, oc, H, W]
+    [N, ic, H, W] -> [N, fc, H, W], [N, oc, H, W]
     '''
-    def __init__(self, ic, ih, iw, oc):
+    def __init__(self, ic, ih, iw, oc, fc=64):
         NeedShape.__init__(self, ic, ih, iw)
         nn.Module.__init__(self)
 
-        self.L1 = ConvStack2(ic, ih, iw, 64)
+        self.L1 = ConvStack2(ic, ih, iw, fc)
         cshape = self.L1.oshape
 
         for i in range(4):
@@ -95,7 +95,7 @@ class UNet(nn.Module, NeedShape):
             self.add_module('L%d' % (i + 6), conv)
         
         self._osp = (oc, *cshape[-2:])
-        self.DW = nn.Conv2d(64, oc, 1)
+        self.DW = nn.Conv2d(fc, oc, 1)
 
     @property
     def oshape(self): return self._osp
@@ -115,9 +115,9 @@ class UNet(nn.Module, NeedShape):
     def forward(self, X):
         '''
         X: [N, C, H, W]
-        O: [N, 64, H, W], [N, oc, H, W]
+        O: [N, fc, H, W], [N, oc, H, W]
         '''
-        x1 = self.L1(X)             # [N, 64, H, W]
+        x1 = self.L1(X)             # [N, fc, H, W]
         x2 = self.L2(self.D1(x1))   # [N, 128, H//2, W//2]
         x3 = self.L3(self.D2(x2))   # [N, 256, H//4, W//4]
         x4 = self.L4(self.D3(x3))   # [N, 512, H//8, W//8]
@@ -126,7 +126,7 @@ class UNet(nn.Module, NeedShape):
         x6 = self.L6(self.cropCat(x4, self.U1(x5)))     # [N, 512, H//8, W//8]
         x7 = self.L7(self.cropCat(x3, self.U2(x6)))     # [N, 256, H//4, W//4]
         x8 = self.L8(self.cropCat(x2, self.U3(x7)))     # [N, 128, H//2, W//2]
-        x9 = self.L9(self.cropCat(x1, self.U4(x8)))     # [N, 64, H, W]
+        x9 = self.L9(self.cropCat(x1, self.U4(x8)))     # [N, fc, H, W]
 
         oh, ow = self.oshape[-2:]
         r = torch.sigmoid(self.DW(x9)[:, :, :oh, :ow])  # [N, oc, H, W]

@@ -18,42 +18,48 @@ class ToyNetTrainer(Trainer):
     def train(self, anno, unanno, vanno=None, vunanno=None):
         aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
         uloader = DataLoader(unanno, **self.dataloader.get('unannotated', {}))
-        anno_only_epoch = self.training.get('use_unannotated_from', self.max_epoch)
+        unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
         try: op = self.getOptimizer()
         except ValueError as e:
             print(e)
             print('Trainer exits before iteration starts.')
             return
         self.prepareBoard()
+        if self.device.type == 'cpu':
+            print('Warning: You are using CPU for training. Be careful of its temperature...')
 
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
-            bar = Bar('epoch %2d(A)' % self.cur_epoch, max=len(anno))
-            for X, Ym, Yb in aloader:
-                loss, summary = self.net.loss(X, Ym, Yb)
-                loss.backward()
-                op.step()
-                self.total_batch += 1
-                self.logSummary(summary, self.total_batch)
-                bar.next()
-            bar.finish()
-            if self.cur_epoch < anno_only_epoch: continue
-
-            bar = Bar('epoch %2d(U)' % self.cur_epoch, max=len(unanno))
+            bar = Bar('epoch U%03d' % self.cur_epoch, max=len(unanno))
             for X, Ym in uloader:
-                loss, summary = self.net.loss(X, Ym)
+                X = X.to(self.device)
+                Ym = Ym.to(self.device)
+                loss, summary = self.net.loss(X, Ym, piter=self.cur_epoch / self.max_epoch)
                 loss.backward()
                 op.step()
                 self.total_batch += 1
                 self.logSummary(summary, self.total_batch)
-                bar.next()
+                bar.next(Ym.shape[0])
             bar.finish()
 
-            ta_bacc = self.score('annotated/training', anno)        # training score
-            self.score('unannotated/training', unanno)
+            bar = Bar('epoch A%03d' % self.cur_epoch, max=len(anno))
+            for X, Ym, Yb in aloader:
+                X = X.to(self.device)
+                Ym = Ym.to(self.device)
+                Yb = None if self.cur_epoch < unanno_only_epoch else Yb.to(self.device) 
+                loss, summary = self.net.loss(X, Ym, Yb, piter=self.cur_epoch / self.max_epoch)
+                loss.backward()
+                op.step()
+                self.total_batch += 1
+                self.logSummary(summary, self.total_batch)
+                bar.next(Ym.shape[0])
+            bar.finish()
+
+            ta_bacc = self.score('annotated/trainset', anno)        # trainset score
+            self.score('unannotated/trainset', unanno)
             if vanno: self.score('annotated/validation', vanno)     # validation score
             if vunanno: self.score('unannotated/validation', vunanno)
 
-            if ta_bacc > self.best_mark:
+            if ta_bacc < self.best_mark:
                 self.best_mark = ta_bacc
                 self.save('best', ta_bacc)
             self.save('latest', ta_bacc)
@@ -65,19 +71,20 @@ class ToyNetTrainer(Trainer):
         sloader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
         d = next(iter(sloader))
         with torch.no_grad(): 
-            M, B, Mp, Bp = self.net(*d[0])          # NOTE: Bp is not softmax-ed
-            macc = F.l1_loss(Mp.squeeze(-1), d[1])
-            self.board.add_scalar(caption + '/accuracy/malignant', macc, self.cur_epoch)
-            self.board.add_image(caption + '/CAM/origin', d[0][0], self.cur_epoch)  # [3, H, W]
-            self.board.add_image(caption + '/CAM/malignant', M[0], self.cur_epoch)  # [1, H, W]
+            M, B, Mp, Bp = self.net(d[0].to(self.device))   # NOTE: Bp is not softmax-ed
+            merr = F.l1_loss(Mp.squeeze(-1), d[1].to(self.device))
+            self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
+            self.board.add_image('eval/%s/CAM/origin' % caption, d[0][0], self.cur_epoch)  # [3, H, W]
+            self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
             if len(d) == 2: return
         
-            bacc = torch.argmax(Bp, -1) == d[2] # but argmax is enough :D
-            bacc = bacc.float().mean()
-            self.board.add_scalar(caption + '/accuracy/BIRADs', bacc, self.cur_epoch)
+            Bp = Bp.to(d[2].device)
+            berr = torch.argmax(Bp, -1) == d[2] # but argmax is enough :D
+            berr = berr.float().mean()
+            self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
             self.board.add_image(
-                caption + '/CAM/BIRADs', 
-                B[0, torch.argmax(Bp[0], -1)],  # [H, W]
-                self.cur_epoch, 'HW'
+                'eval/%s/CAM/BIRADs' % caption, 
+                B[0, torch.argmax(Bp[0], -1)],
+                self.cur_epoch, dataformats='HW'
             )
-            return bacc
+            return berr

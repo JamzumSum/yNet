@@ -30,12 +30,12 @@ class JointEstimator(nn.Sequential):
         return nn.Sequential.forward(self, torch.cat([M, B], dim=1))
 
 class ToyNetV2(ToyNetV1):
-    def __init__(self, ishape, K, patch_size, a=1., b=0.5):
-        ToyNetV1.__init__(self, ishape, K, patch_size, a)
+    def __init__(self, ishape, K, patch_size, fc=64, a=1., b=0.5):
+        ToyNetV1.__init__(self, ishape, K, patch_size, fc, a)
         self.Q = JointEstimator(K)
         self.b = b
 
-    def loss(self, X, Ym, Yb, piter=0.):
+    def loss(self, X, Ym, Yb=None, piter=0.):
         '''
         X: [N, 1, H, W]
         Ym: [N], long
@@ -44,7 +44,7 @@ class ToyNetV2(ToyNetV1):
         '''
         M, B, Pm, Pb = self.forward(X)
         Mloss = F.cross_entropy(torch.cat([1 - Pm, Pm], dim=-1), Ym)
-        Bloss = F.cross_entropy(Pb, Yb)
+        Bloss = 0 if Yb is None else F.cross_entropy(Pb, Yb)
         
         Qpos = self.Q(M, B)        # [N, K, H, W]
         Qneg = B - Qpos
@@ -54,11 +54,10 @@ class ToyNetV2(ToyNetV1):
         infoLoss = torch.mean(infoLoss)
         warmup = self.b * torch.exp(-5 * (1 - piter))
 
-        return Mloss + self.a * Bloss + warmup * infoLoss, {
-            'malignant entropy': Mloss.detach(), 
-            'BIRADs entropy': Bloss.detach(), 
-            'mutual info': infoLoss.detach(),
-            'gaussian warm-up b': warmup,
-            'malignant CAM': M.detach(), 
-            'BIRADs CAM': B.detach()
+        summary = {
+            'loss/malignant entropy': Mloss.detach(), 
+            'likelihood/mutual info': infoLoss.detach(),
+            'coefficency/gaussian warm-up b': warmup
         }
+        if Yb is not None: summary['loss/BIRADs entropy'] = Bloss.detach()
+        return Mloss + self.a * Bloss - warmup * infoLoss, 
