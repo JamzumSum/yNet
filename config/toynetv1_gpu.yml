@@ -5,7 +5,7 @@ model:      # model constructor
     - 512
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_size: 32
-  fc: 32
+  fc: 16
 training:  # training strategy
   device: cuda:0
   continue: False
@@ -16,19 +16,20 @@ optimizer:
   Adam:
     lr: 0.0005
 scheduler:
+  factor: 0.2
   patience: 2
   verbose: True
   cooldown: 8
 dataloader:
   annotated:
-    batch_size: 8
+    batch_size: 11
     shuffle: True
     drop_last: True
   unannotated:
-    batch_size: 8
+    batch_size: 11
     shuffle: True
   scoring:
-    batch_size: 8
+    batch_size: 11
     shuffle: True
 paths:
   model_dir: model/toynetv1/Adam

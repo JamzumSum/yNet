@@ -16,6 +16,7 @@ optimizer:
   Adam:
     lr: 0.0005
 scheduler:
+  factor: 0.2
   patience: 2
   verbose: True
   cooldown: 8
@@ -30,5 +31,5 @@ dataloader:
   scoring:
     batch_size: 8
 paths:
-  model_dir: model/toynetv1/Adam
+  model_dir: model/toynetv1/focal
   log_dir: log/toynetv1/{date}

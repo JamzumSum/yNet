@@ -3,13 +3,6 @@ import re
 import yaml
 
 def birad_label():
-    '''
-    B83 IGNORED
-    B99 PASSED
-    B101 PASSED
-    B205 PASSED
-    B224 PASSED
-    '''
     csv = {}
     with open('./data/BIRADs/raw/BIRADs.csv', encoding='utf8') as f:
         f.readline()

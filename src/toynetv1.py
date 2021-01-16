@@ -11,6 +11,25 @@ import torch.nn.functional as F
 from common.unet import UNet
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
+
+def focalCE(P, Y, gamma=2., alpha=None):
+    '''
+    focal loss for classification.
+    - P: [N, K] NOTE: for each P_i[K] in P, sum(P_i) == 1
+    - Y: [N]    NOTE: long
+    - gamma: 
+    - alpha: [K], coefficient for class K.
+    '''
+    if Y.max() >= P.shape[1]: raise ValueError('Y out of bound when calculating CE.')
+
+    mask = torch.nn.functional.one_hot(Y)   # [N, K]
+    gms = torch.pow(1 - P, gamma)           # [N, K]
+    logs = torch.log(P)                     # [N, K]
+    if alpha is None:
+        return -torch.sum(mask * gms * logs, dim=-1).mean()
+    else:
+        return -torch.sum(alpha * mask * gms * logs, dim=-1).mean()
+
 class BIRADsUNet(UNet):
     '''
     [N, 1, H, W] -> [N, 1, H, W], [N, K, H, W]
@@ -31,11 +50,19 @@ class BIRADsUNet(UNet):
         return Mhead, Bhead
 
 class ToyNetV1(nn.Module):
+    mbalance = torch.Tensor([0.3, 0.7])
+    bbalance = torch.Tensor([0.03, 0.19, 0.16, 0.2, 0.14, 0.28])
+
     def __init__(self, ishape, K, patch_size, fc=64, a=1.):
         nn.Module.__init__(self)
         self.backbone = BIRADsUNet(*ishape, K, fc)
         self.pooling = nn.AvgPool2d(patch_size)
         self.a = a
+
+    def to(self, device, *args, **argv):
+        self.mbalance.to(device, *args, **argv)
+        self.bbalance.to(device, *args, **argv)
+        super(ToyNetV1, self).to(device, *args, **argv)
 
     def forward(self, X):
         '''
@@ -60,13 +87,16 @@ class ToyNetV1(nn.Module):
         Ym: [N], long
         Yb: [N], long
         '''
+        
         M, B, Pm, Pb = self.forward(X)      # ToyNetV1 discards two CAMs
-        Mloss = F.cross_entropy(torch.cat([1 - Pm, Pm], dim=-1), Ym)    # use [N, 2] to cal. CE
-        Bloss = 0 if Yb is None else F.cross_entropy(Pb, Yb)
+        Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, alpha=self.mbalance)    # use [N, 2] to cal. CE
         summary = {
-            'loss/malignant entropy': Mloss.detach()
+            'loss/malignant focal': Mloss.detach()
         }
-        if Yb is not None: summary['loss/BIRADs entropy'] = Bloss.detach()
+        if Yb is None: Bloss = 0
+        else:
+            Bloss = focalCE(torch.softmax(Pb, dim=-1), Yb, alpha=self.bbalance)
+            summary['loss/BIRADs focal'] = Bloss.detach()
         return Mloss + self.a * Bloss, summary
 
 if __name__ == "__main__":

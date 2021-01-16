@@ -47,7 +47,7 @@ class ToyNetTrainer(Trainer):
                 freeze(loss, 0.9).backward()
                 op.step()
                 self.total_batch += 1
-                self.logSummary(summary, 'unannotated', self.total_batch)
+                self.logSummary('unannotated', summary, self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
 
@@ -60,7 +60,7 @@ class ToyNetTrainer(Trainer):
                 loss.backward()
                 op.step()
                 self.total_batch += 1
-                self.logSummary(summary, 'annotated', self.total_batch)
+                self.logSummary('annotated', summary, self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
 
@@ -74,7 +74,7 @@ class ToyNetTrainer(Trainer):
                 self.save('best', ta_berr)
             self.save('latest', ta_berr)
 
-            if sg: sg.step(ta_berr, epoch=self.cur_epoch)
+            if sg and self.cur_epoch > 10: sg.step(ta_berr, epoch=self.cur_epoch)
 
     @NoGrad
     def score(self, caption, dataset):

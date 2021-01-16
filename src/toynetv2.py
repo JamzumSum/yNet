@@ -6,7 +6,7 @@ Make use of the CAMs.
 * create: 2021-1-11
 '''
 
-from toynetv1 import ToyNetV1
+from toynetv1 import ToyNetV1, focalCE
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -43,8 +43,7 @@ class ToyNetV2(ToyNetV1):
         piter: current iter times / total iter times
         '''
         M, B, Pm, Pb = self.forward(X)
-        Mloss = F.cross_entropy(torch.cat([1 - Pm, Pm], dim=-1), Ym)
-        Bloss = 0 if Yb is None else F.cross_entropy(Pb, Yb)
+        Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, alpha=self.mbalance)
         
         Qpos = self.Q(M, B)        # [N, K, H, W]
         Qneg = B - Qpos
@@ -59,5 +58,8 @@ class ToyNetV2(ToyNetV1):
             'likelihood/mutual info': infoLoss.detach(),
             'coefficency/gaussian warm-up b': warmup
         }
-        if Yb is not None: summary['loss/BIRADs entropy'] = Bloss.detach()
+        if Yb is None: Bloss = 0
+        else:
+            Bloss = focalCE(torch.softmax(Pb, dim=-1), Yb, alpha=self.bbalance)
+            summary['loss/BIRADs focal'] = Bloss.detach()
         return Mloss + self.a * Bloss - warmup * infoLoss, 
