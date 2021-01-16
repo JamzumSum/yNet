@@ -27,7 +27,7 @@ class Trainer:
         self.model_conf = conf.get('model', {})
 
         self.net = Net(**self.model_conf)
-        try: self.load(self.model_dir)
+        try: self.load(self.training.get('load_from', 'latest'))
         except ValueError as e:
             print(e)
             print('Trainer stopped.')
@@ -65,9 +65,7 @@ class Trainer:
         )
     
     def load(self, name):
-        if not self.training.get('continue', True): 
-            if name: raise ValueError("You've set name=%s, but continue training is off." % name)
-            return
+        if not self.training.get('continue', True): return
         path = os.path.join(self.model_dir, name + '.pt')
         if not os.path.exists(path): 
             print('%s not exist. Start new training.' % path)
@@ -92,7 +90,7 @@ class Trainer:
         if self.board is None: self.board = SummaryWriter(self.log_dir)
         
     def logSummary(self, summary: dict, step=None):
-        self.board.add_scalars('summary', summary, step)
+        self.board.add_scalars('summary', summary, step)    # TODO: folders seems strange... use `add_scalar` instead
 
     def getOptimizer(self):
         for k, v in self.op_conf.items(): return getattr(torch.optim, k)(self.net.parameters(), **v)

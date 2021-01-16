@@ -1,5 +1,5 @@
 from functools import wraps
-
+import torch
 class KeyboardInterruptWrapper:
     def __init__(self, solution):
         self._s = solution
@@ -11,6 +11,13 @@ class KeyboardInterruptWrapper:
             except KeyboardInterrupt:
                 this._s(self)
         return wrapped
+
+def NoGrad(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        with torch.no_grad():
+            func(*args, **kwargs)
+    return wrapped
 
 def cal_parameters(model):
     blank = ' '

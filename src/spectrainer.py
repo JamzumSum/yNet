@@ -10,7 +10,7 @@ from progress.bar import Bar
 from torch.utils.data import DataLoader
 
 from common.trainer import Trainer
-from common.utils import KeyboardInterruptWrapper
+from common.utils import KeyboardInterruptWrapper, NoGrad
 from toynetv2 import ToyNetV1, ToyNetV2
 
 class ToyNetTrainer(Trainer):
@@ -64,27 +64,39 @@ class ToyNetTrainer(Trainer):
                 self.save('best', ta_bacc)
             self.save('latest', ta_bacc)
 
+    @NoGrad
     def score(self, caption, dataset):
         '''
         Calculate accuracy of the given dataset.
         '''
         sloader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
-        d = next(iter(sloader))
-        with torch.no_grad(): 
-            M, B, Mp, Bp = self.net(d[0].to(self.device))   # NOTE: Bp is not softmax-ed
-            merr = F.l1_loss(Mp.squeeze(-1), d[1].to(self.device))
-            self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
-            self.board.add_image('eval/%s/CAM/origin' % caption, d[0][0], self.cur_epoch)  # [3, H, W]
-            self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
-            if len(d) == 2: return
+        merr = []; berr = []
+        for d in sloader:
+            X, Ym = d[:2]
+
+            _, _, Pm, Pb = self.net(X.to(self.device))   # NOTE: Bp is not softmax-ed
+            merr.append(F.l1_loss(Pm.squeeze(-1), Ym.to(self.device)))
+            if len(d) == 2: continue
+            else: Yb = d[2]
         
-            Bp = Bp.to(d[2].device)
-            berr = torch.argmax(Bp, -1) == d[2] # but argmax is enough :D
-            berr = berr.float().mean()
-            self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
-            self.board.add_image(
-                'eval/%s/CAM/BIRADs' % caption, 
-                B[0, torch.argmax(Bp[0], -1)],
-                self.cur_epoch, dataformats='HW'
-            )
-            return berr
+            Pb = Pb.to(Yb.device)
+            be = torch.argmax(Pb, -1) != Yb # but argmax is enough :D
+            berr.append(be.float().mean())
+                
+        merr = torch.cat(merr).mean()
+        self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
+
+        X, Ym = dataset[:1][:2]
+        M, B, _, Pb = self.net(X.to(self.device))
+        self.board.add_image('eval/%s/CAM/origin' % caption, X[0], self.cur_epoch)  # [3, H, W]
+        self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
+
+        if not berr: return
+        berr = torch.cat(berr).mean()
+        self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
+        self.board.add_image(
+            'eval/%s/CAM/BIRADs' % caption, 
+            B[0, torch.argmax(Pb[0], -1)],
+            self.cur_epoch, dataformats='HW'
+        )
+        return berr

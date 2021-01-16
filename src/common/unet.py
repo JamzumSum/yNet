@@ -118,17 +118,19 @@ class UNet(nn.Module, NeedShape):
         O: [N, fc, H, W], [N, oc, H, W]
         '''
         x1 = self.L1(X)             # [N, fc, H, W]
-        x2 = self.L2(self.D1(x1))   # [N, 128, H//2, W//2]
-        x3 = self.L3(self.D2(x2))   # [N, 256, H//4, W//4]
-        x4 = self.L4(self.D3(x3))   # [N, 512, H//8, W//8]
-        x5 = self.L5(self.D4(x4))   # [N, 1024, H//16, W//16]
+        x2 = self.L2(self.D1(x1))   # [N, 2*fc, H//2, W//2]
+        x3 = self.L3(self.D2(x2))   # [N, 4*fc, H//4, W//4]
+        x4 = self.L4(self.D3(x3))   # [N, 8*fc, H//8, W//8]
+        x5 = self.L5(self.D4(x4))   # [N, 16*fc, H//16, W//16]
 
-        x6 = self.L6(self.cropCat(x4, self.U1(x5)))     # [N, 512, H//8, W//8]
-        x7 = self.L7(self.cropCat(x3, self.U2(x6)))     # [N, 256, H//4, W//4]
-        x8 = self.L8(self.cropCat(x2, self.U3(x7)))     # [N, 128, H//2, W//2]
+        x6 = self.L6(self.cropCat(x4, self.U1(x5)))     # [N, 8*fc, H//8, W//8]
+        x7 = self.L7(self.cropCat(x3, self.U2(x6)))     # [N, 4*fc, H//4, W//4]
+        x8 = self.L8(self.cropCat(x2, self.U3(x7)))     # [N, 2*fc, H//2, W//2]
         x9 = self.L9(self.cropCat(x1, self.U4(x8)))     # [N, fc, H, W]
 
-        oh, ow = self.oshape[-2:]
+        oh, ow = self.oshape[-2:]   # NOTE: For origin U-Net use 2x2 conv as a 'up-conv', and it cannot 
+                                    # be aligned when H or W is odd. So for the sake of keeping HW unchanged, 
+                                    # it has to slice deepwise output according to the shape inferenced before. 
         r = torch.sigmoid(self.DW(x9)[:, :, :oh, :ow])  # [N, oc, H, W]
         return x9, r
 
