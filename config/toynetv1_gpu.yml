@@ -15,6 +15,10 @@ training:  # training strategy
 optimizer:
   Adam:
     lr: 0.0005
+scheduler:
+  patience: 2
+  verbose: True
+  cooldown: 8
 dataloader:
   annotated:
     batch_size: 8
@@ -28,4 +32,4 @@ dataloader:
     shuffle: True
 paths:
   model_dir: model/toynetv1/Adam
-  log_dir: log/toynetv1/Adam
+  log_dir: log/toynetv1/{date}

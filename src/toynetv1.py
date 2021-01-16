@@ -52,7 +52,6 @@ class ToyNetV1(nn.Module):
 
         Mp = torch.amax(Mpatches, dim=(2, 3))        # [N, 1]
         Bp = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
-        # Bp = torch.softmax(Bp, -1)        # NOTE: CANNOT use softmax here for crossentropy in torch applies softmax itself
         return Mhead, Bhead, Mp, Bp
 
     def loss(self, X, Ym, Yb=None, piter=0.):

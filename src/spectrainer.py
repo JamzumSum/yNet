@@ -13,18 +13,28 @@ from common.trainer import Trainer
 from common.utils import KeyboardInterruptWrapper, NoGrad
 from toynetv2 import ToyNetV1, ToyNetV2
 
+def freeze(tensor, f=0.):
+    return (1 - f) * tensor + f * tensor.detach()
 class ToyNetTrainer(Trainer):
-    @KeyboardInterruptWrapper(lambda self: print('Training resumed. Start from epoch%d next time.' % self.cur_epoch))
+    @KeyboardInterruptWrapper(lambda self: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
     def train(self, anno, unanno, vanno=None, vunanno=None):
         aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
         uloader = DataLoader(unanno, **self.dataloader.get('unannotated', {}))
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
+
+        # get optimizer
         try: op = self.getOptimizer()
         except ValueError as e:
             print(e)
             print('Trainer exits before iteration starts.')
             return
+        # get scheduler
+        if 'scheduler' in self.conf: 
+            sg = torch.optim.lr_scheduler.ReduceLROnPlateau(op, 'min', **self.conf['scheduler'])
+        else: sg = None
+        # init tensorboard logger
         self.prepareBoard()
+        # lemme see who dare to use cpu for training ???
         if self.device.type == 'cpu':
             print('Warning: You are using CPU for training. Be careful of its temperature...')
 
@@ -34,10 +44,10 @@ class ToyNetTrainer(Trainer):
                 X = X.to(self.device)
                 Ym = Ym.to(self.device)
                 loss, summary = self.net.loss(X, Ym, piter=self.cur_epoch / self.max_epoch)
-                loss.backward()
+                freeze(loss, 0.9).backward()
                 op.step()
                 self.total_batch += 1
-                self.logSummary(summary, self.total_batch)
+                self.logSummary(summary, 'unannotated', self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
 
@@ -50,19 +60,21 @@ class ToyNetTrainer(Trainer):
                 loss.backward()
                 op.step()
                 self.total_batch += 1
-                self.logSummary(summary, self.total_batch)
+                self.logSummary(summary, 'annotated', self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
 
-            ta_bacc = self.score('annotated/trainset', anno)        # trainset score
+            ta_berr = self.score('annotated/trainset', anno)        # trainset score
             self.score('unannotated/trainset', unanno)
             if vanno: self.score('annotated/validation', vanno)     # validation score
             if vunanno: self.score('unannotated/validation', vunanno)
 
-            if ta_bacc < self.best_mark:
-                self.best_mark = ta_bacc
-                self.save('best', ta_bacc)
-            self.save('latest', ta_bacc)
+            if ta_berr < self.best_mark:
+                self.best_mark = ta_berr
+                self.save('best', ta_berr)
+            self.save('latest', ta_berr)
+
+            if sg: sg.step(ta_berr, epoch=self.cur_epoch)
 
     @NoGrad
     def score(self, caption, dataset):
@@ -83,7 +95,7 @@ class ToyNetTrainer(Trainer):
             be = torch.argmax(Pb, -1) != Yb # but argmax is enough :D
             berr.append(be.float().mean())
                 
-        merr = torch.cat(merr).mean()
+        merr = torch.stack(merr).mean()
         self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
 
         X, Ym = dataset[:1][:2]
@@ -92,7 +104,7 @@ class ToyNetTrainer(Trainer):
         self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
 
         if not berr: return
-        berr = torch.cat(berr).mean()
+        berr = torch.stack(berr).mean()
         self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
         self.board.add_image(
             'eval/%s/CAM/BIRADs' % caption, 

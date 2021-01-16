@@ -5,7 +5,7 @@ model:      # model constructor
     - 512
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_size: 32
-  fc: 32
+  fc: 16
 training:  # training strategy
   device: cpu
   continue: True
@@ -15,17 +15,20 @@ training:  # training strategy
 optimizer:
   Adam:
     lr: 0.0005
+scheduler:
+  patience: 2
+  verbose: True
+  cooldown: 8
 dataloader:
   annotated:
-    batch_size: 16
+    batch_size: 8
     shuffle: True
     drop_last: True
   unannotated:
-    batch_size: 16
+    batch_size: 8
     shuffle: True
   scoring:
-    batch_size: 64    # extract 64 data to validate
-    shuffle: True
+    batch_size: 8
 paths:
   model_dir: model/toynetv1/Adam
-  log_dir: log/toynetv1/Adam
+  log_dir: log/toynetv1/{date}

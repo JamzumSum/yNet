@@ -56,7 +56,7 @@ class UpConv(nn.Sequential, NeedShape):
         nn.Sequential.__init__(
             self, 
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False), 
-            nn.Conv2d(ic, ic//2, 2),      # NOTE: 2x2 cannot be aligned
+            nn.Conv2d(ic, ic//2, 3, 1, 1),      # NOTE: 2x2 cannot be aligned
             nn.BatchNorm2d(ic // 2)
         )
         self.BN = nn.BatchNorm2d(ic // 2)
@@ -107,10 +107,11 @@ class UNet(nn.Module, NeedShape):
         Y: [N, C, H_min, W_min]
         -> [N, C, H_min, W_min]
         '''
-        t1 = (X.shape[2] - Y.shape[2]) // 2
-        t2 = (X.shape[3] - Y.shape[3]) // 2
-        cropX = X[:, :, t1: t1 + Y.shape[2], t2: t2 + Y.shape[3]]
-        return torch.cat([cropX, Y], dim=1)
+        # t1 = (X.shape[2] - Y.shape[2]) // 2
+        # t2 = (X.shape[3] - Y.shape[3]) // 2
+        # cropX = X[:, :, t1: t1 + Y.shape[2], t2: t2 + Y.shape[3]]
+        # return torch.cat([cropX, Y], dim=1)
+        return torch.cat([X, Y], dim=1)
         
     def forward(self, X):
         '''
@@ -128,10 +129,11 @@ class UNet(nn.Module, NeedShape):
         x8 = self.L8(self.cropCat(x2, self.U3(x7)))     # [N, 2*fc, H//2, W//2]
         x9 = self.L9(self.cropCat(x1, self.U4(x8)))     # [N, fc, H, W]
 
-        oh, ow = self.oshape[-2:]   # NOTE: For origin U-Net use 2x2 conv as a 'up-conv', and it cannot 
-                                    # be aligned when H or W is odd. So for the sake of keeping HW unchanged, 
-                                    # it has to slice deepwise output according to the shape inferenced before. 
-        r = torch.sigmoid(self.DW(x9)[:, :, :oh, :ow])  # [N, oc, H, W]
+        # oh, ow = self.oshape[-2:]   # NOTE: For origin U-Net use 2x2 conv as a 'up-conv', and it cannot 
+        #                             # be aligned when H or W is odd. So for the sake of keeping HW unchanged, 
+        #                             # it has to slice deepwise output according to the shape inferenced before. 
+        # r = torch.sigmoid(self.DW(x9)[:, :, :oh, :ow])  # [N, oc, H, W]
+        r = torch.sigmoid(self.DW(x9))
         return x9, r
 
 if __name__ == "__main__":

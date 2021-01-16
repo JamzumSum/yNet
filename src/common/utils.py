@@ -16,7 +16,7 @@ def NoGrad(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
         with torch.no_grad():
-            func(*args, **kwargs)
+            return func(*args, **kwargs)
     return wrapped
 
 def cal_parameters(model):

@@ -4,6 +4,7 @@ A universial trainer ready to be inherited.
 * author: JamzumSum
 * create: 2021-1-12
 '''
+from datetime import date
 import os
 
 import torch
@@ -39,10 +40,14 @@ class Trainer:
 
     @property 
     def model_dir(self): 
-        return self.paths.get('model_dir', os.path.join('model', self.cls_name))
+        return self.paths.get('model_dir', os.path.join('model', self.cls_name)).format(
+            date=date.today().strftime('%m%d')
+        )
     @property
     def log_dir(self):
-        return self.paths.get('log_dir', os.path.join('log', self.cls_name))
+        return self.paths.get('log_dir', os.path.join('log', self.cls_name)).format(
+            date=date.today().strftime('%m%d')
+        )
     
     @property
     def device(self):
@@ -89,9 +94,15 @@ class Trainer:
         '''fxxk tensorboard spoil the log so LAZY LOAD it'''
         if self.board is None: self.board = SummaryWriter(self.log_dir)
         
-    def logSummary(self, summary: dict, step=None):
-        self.board.add_scalars('summary', summary, step)    # TODO: folders seems strange... use `add_scalar` instead
+    def logSummary(self, caption, summary: dict, step=None):
+        for k, v in summary.items():
+            self.board.add_scalar('summary/%s/%s' % (caption, k), v, step)
 
-    def getOptimizer(self):
+    def getOptimizer(self)-> torch.optim.Optimizer:
         for k, v in self.op_conf.items(): return getattr(torch.optim, k)(self.net.parameters(), **v)
         raise ValueError('Optimizer is not specified.')
+
+    def getScheduler(self, optimizer):
+        if 'scheduler' not in self.conf: return None
+        for k, v in self.conf['scheduler']:
+            return getattr(torch.optim.lr_scheduler, k)(optimizer, **v)
