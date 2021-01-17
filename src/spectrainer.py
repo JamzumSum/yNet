@@ -16,6 +16,10 @@ from toynetv2 import ToyNetV1, ToyNetV2
 def freeze(tensor, f=0.):
     return (1 - f) * tensor + f * tensor.detach()
 class ToyNetTrainer(Trainer):
+    @property
+    def logHotmap(self):
+        return hasattr(self.net, 'hotmap') and bool(self.net.hotmap)
+
     @KeyboardInterruptWrapper(lambda self: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
     def train(self, anno, unanno, vanno=None, vunanno=None):
         aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
@@ -88,16 +92,16 @@ class ToyNetTrainer(Trainer):
         for d in sloader:
             X, Ym = d[:2]
 
-            _, _, Pm, Pb = self.net(X.to(self.device))   # NOTE: Bp is not softmax-ed
-            Pm = Pm.squeeze(-1)
-            mres.append(torch.round(Pm))
+            Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pb is not softmax-ed
+            Pm = torch.argmax(Pm, dim=-1).float()
+            mres.append(Pm)
             merr.append(F.l1_loss(Pm, Ym.to(self.device)))
 
             if len(d) == 2: continue
             else: Yb = d[2]
         
             be = torch.argmax(Pb, -1) != Yb.to(self.device) # but argmax is enough :D
-            bres.append(torch.argmax(Pb))
+            bres.append(torch.argmax(Pb, dim=-1))
             berr.append(be.float().mean())
                 
         merr = torch.stack(merr).mean()
@@ -106,18 +110,22 @@ class ToyNetTrainer(Trainer):
         self.board.add_histogram('eval/%s/distribution/malignant' % caption, mres, self.cur_epoch)
 
         X, Ym = dataset[:1][:2]
-        M, B, _, Pb = self.net(X.to(self.device))
-        self.board.add_image('eval/%s/CAM/origin' % caption, X[0], self.cur_epoch)  # [3, H, W]
-        self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
+        res = self.net(X.to(self.device))
+        if self.logHotmap:
+            M, B, _, Pb = res
+            self.board.add_image('eval/%s/CAM/origin' % caption, X[0], self.cur_epoch)  # [3, H, W]
+            self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
+        else: _, Pb = res
 
         if not berr: return
-        B = (B * torch.softmax(Pb, dim=-1)).sum(dim=1)     # [N, H, W]
         berr = torch.stack(berr).mean()
-        bres = torch.cat(bres)
+        bres = torch.stack(bres)
         absurd = ((bres == 0) * (mres == 1)).sum() + ((bres == 5) * (mres == 0)).sum()  # BIRAD-2 but malignant, BIRAD-5 but benign
         
         self.board.add_scalar('eval/%s/absurd' % caption, absurd / mres.shape[0], self.cur_epoch)
         self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
-        self.board.add_histogram('eval/%s/CAM/BIRADs' % caption, bres, self.cur_epoch)
-        self.board.add_image('eval/%s/CAM/BIRADs' % caption, B[0], self.cur_epoch, dataformats='HW')
+        if self.logHotmap:
+            B = (B * torch.softmax(Pb, dim=-1)).sum(dim=1)     # [N, H, W]
+            self.board.add_histogram('eval/%s/CAM/BIRADs' % caption, bres, self.cur_epoch)
+            self.board.add_image('eval/%s/CAM/BIRADs' % caption, B[0], self.cur_epoch, dataformats='HW')
         return berr

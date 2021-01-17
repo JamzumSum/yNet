@@ -23,10 +23,11 @@ class JointEstimator(nn.Sequential):
         )
     def forward(self, M, B):
         '''
-        M: [N, 1, H, W]
+        M: [N, 2, H, W]
         B: [N, K, H, W]
         O: [N, K, H, W], which represents P(malignant, BIRADs=k)
         '''
+        M = M[:, 1:2]   # get the malignant confidence channel, [N, 1, H, W]
         return nn.Sequential.forward(self, torch.cat([M, B], dim=1))
 
 class ToyNetV2(ToyNetV1):
@@ -37,7 +38,7 @@ class ToyNetV2(ToyNetV1):
 
     def loss(self, X, Ym, Yb=None, piter=0.):
         '''
-        X: [N, 1, H, W]
+        X: [N, ic, H, W]
         Ym: [N], long
         Yb: [N], long
         piter: current iter times / total iter times
@@ -45,11 +46,18 @@ class ToyNetV2(ToyNetV1):
         M, B, Pm, Pb = self.forward(X)
         Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, gamma=2 * piter, weight=self.mbalance)
         
+        # M needs softmax for mlaignant/bengin exclude each other even if multi tumors are detected.
+        # But B need no softmax in fact for BIRADs can be actually all the classes the tumors are.
+        # But for simplifying the problem, BIRADs classification is treated as single-class task now.
+        M = torch.softmax(M, dim=1)
+        B = torch.softmax(B, dim=1)
+        Mpos, Mneg = torch.split(M, [1, 1], dim=1)
+
         Qpos = self.Q(M, B)        # [N, K, H, W]
         Qneg = B - Qpos
-        mal_info = Qpos * torch.log2(Qpos / M / B)          # [N, K, H, W]
-        ben_info = Qneg * torch.log2(Qneg / (1 - M) / B)    # [N, K, H, W]
-        infoLoss = torch.sum(ben_info, dim=(1, 2, 3)) + torch.sum(mal_info, dim=(1, 2, 3))    # [N]
+        mal_info = Qpos * torch.log2(Qpos / Mpos / B)   # [N, K, H, W]
+        ben_info = Qneg * torch.log2(Qneg / Mneg / B)   # [N, K, H, W]
+        infoLoss = torch.asum(ben_info, dim=(1, 2, 3)) + torch.asum(mal_info, dim=(1, 2, 3))    # [N]
         infoLoss = torch.mean(infoLoss)
         warmup = self.b * torch.exp(-5 * (1 - piter))
 

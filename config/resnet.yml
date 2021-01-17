@@ -1,0 +1,30 @@
+model:      # model constructor
+  model: resnet50
+  K: 6     # 2, 3, 4a, 4b, 4c, 5
+training:  # training strategy
+  device: cpu
+  continue: True
+  load_from: latest
+  max_epoch: 80
+  use_unannotated_from: 0  # epoch
+optimizer:
+  Adam:
+    lr: 0.001
+scheduler:
+  factor: 0.2
+  patience: 2
+  verbose: True
+  cooldown: 8
+dataloader:
+  annotated:
+    batch_size: 11
+    shuffle: True
+    drop_last: True
+  unannotated:
+    batch_size: 11
+    shuffle: True
+  scoring:
+    batch_size: 11
+paths:
+  model_dir: model/resnet50/
+  log_dir: log/resnet50/{date}
