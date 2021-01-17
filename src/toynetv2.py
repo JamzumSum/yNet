@@ -43,7 +43,7 @@ class ToyNetV2(ToyNetV1):
         piter: current iter times / total iter times
         '''
         M, B, Pm, Pb = self.forward(X)
-        Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, alpha=self.mbalance)
+        Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, gamma=2 * piter, weight=self.mbalance)
         
         Qpos = self.Q(M, B)        # [N, K, H, W]
         Qneg = B - Qpos
@@ -60,6 +60,6 @@ class ToyNetV2(ToyNetV1):
         }
         if Yb is None: Bloss = 0
         else:
-            Bloss = focalCE(torch.softmax(Pb, dim=-1), Yb, alpha=self.bbalance)
+            Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
             summary['loss/BIRADs focal'] = Bloss.detach()
         return Mloss + self.a * Bloss - warmup * infoLoss, 

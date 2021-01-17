@@ -43,10 +43,11 @@ class ToyNetTrainer(Trainer):
             for X, Ym in uloader:
                 X = X.to(self.device)
                 Ym = Ym.to(self.device)
-                loss, summary = self.net.loss(X, Ym, piter=self.cur_epoch / self.max_epoch)
-                freeze(loss, 0.9).backward()
-                op.step()
-                self.total_batch += 1
+                with torch.no_grad():
+                    loss, summary = self.net.loss(X, Ym, piter=self.cur_epoch / self.max_epoch)
+                # loss.backward()
+                # op.step()
+                # self.total_batch += 1
                 self.logSummary('unannotated', summary, self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
@@ -74,7 +75,7 @@ class ToyNetTrainer(Trainer):
                 self.save('best', ta_berr)
             self.save('latest', ta_berr)
 
-            if sg and self.cur_epoch > 10: sg.step(ta_berr, epoch=self.cur_epoch)
+            if sg and self.cur_epoch >= unanno_only_epoch: sg.step(ta_berr)
 
     @NoGrad
     def score(self, caption, dataset):
@@ -83,20 +84,26 @@ class ToyNetTrainer(Trainer):
         '''
         sloader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
         merr = []; berr = []
+        mres = []; bres = []
         for d in sloader:
             X, Ym = d[:2]
 
             _, _, Pm, Pb = self.net(X.to(self.device))   # NOTE: Bp is not softmax-ed
-            merr.append(F.l1_loss(Pm.squeeze(-1), Ym.to(self.device)))
+            Pm = Pm.squeeze(-1)
+            mres.append(torch.round(Pm))
+            merr.append(F.l1_loss(Pm, Ym.to(self.device)))
+
             if len(d) == 2: continue
             else: Yb = d[2]
         
-            Pb = Pb.to(Yb.device)
-            be = torch.argmax(Pb, -1) != Yb # but argmax is enough :D
+            be = torch.argmax(Pb, -1) != Yb.to(self.device) # but argmax is enough :D
+            bres.append(torch.argmax(Pb))
             berr.append(be.float().mean())
                 
         merr = torch.stack(merr).mean()
+        mres = torch.cat(mres)
         self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
+        self.board.add_histogram('eval/%s/distribution/malignant' % caption, mres, self.cur_epoch)
 
         X, Ym = dataset[:1][:2]
         M, B, _, Pb = self.net(X.to(self.device))
@@ -104,11 +111,13 @@ class ToyNetTrainer(Trainer):
         self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
 
         if not berr: return
+        B = (B * torch.softmax(Pb, dim=-1)).sum(dim=1)     # [N, H, W]
         berr = torch.stack(berr).mean()
+        bres = torch.cat(bres)
+        absurd = ((bres == 0) * (mres == 1)).sum() + ((bres == 5) * (mres == 0)).sum()  # BIRAD-2 but malignant, BIRAD-5 but benign
+        
+        self.board.add_scalar('eval/%s/absurd' % caption, absurd / mres.shape[0], self.cur_epoch)
         self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
-        self.board.add_image(
-            'eval/%s/CAM/BIRADs' % caption, 
-            B[0, torch.argmax(Pb[0], -1)],
-            self.cur_epoch, dataformats='HW'
-        )
+        self.board.add_histogram('eval/%s/CAM/BIRADs' % caption, bres, self.cur_epoch)
+        self.board.add_image('eval/%s/CAM/BIRADs' % caption, B[0], self.cur_epoch, dataformats='HW')
         return berr

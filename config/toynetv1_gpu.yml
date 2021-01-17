@@ -11,7 +11,7 @@ training:  # training strategy
   continue: False
   load_from: latest
   max_epoch: 100
-  use_annotation_from: 30  # epoch
+  use_annotation_from: 40  # epoch
 optimizer:
   Adam:
     lr: 0.0005
