@@ -10,7 +10,7 @@ from progress.bar import Bar
 from torch.utils.data import DataLoader
 
 from common.trainer import Trainer
-from common.utils import KeyboardInterruptWrapper, NoGrad, freeze
+from common.utils import KeyboardInterruptWrapper, NoGrad, freeze, gray2JET
 from toynetv2 import ToyNetV1, ToyNetV2
     
 class ToyNetTrainer(Trainer):
@@ -143,8 +143,8 @@ class ToyNetTrainer(Trainer):
         res = self.net(X.to(self.device))
         if self.logHotmap:
             M, B, _, Pb = res
-            self.board.add_image('CAM origin/%s' % caption, X[0], self.cur_epoch)  # [3, H, W]
-            self.board.add_image('CAM malignant/%s' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
+            hotmap = 0.5 * X[0] + 0.3 * gray2JET(M[0, 0])
+            self.board.add_image('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
         else: _, Pb = res
 
         if not berr: return
@@ -156,6 +156,7 @@ class ToyNetTrainer(Trainer):
         self.board.add_scalar('err/BIRADs/%s' % caption, berr, self.cur_epoch)
         if self.logHotmap:
             B = (B.permute(0, 2, 3, 1) * torch.softmax(Pb, dim=-1)).sum(dim=-1)     # [N, H, W]
-            self.board.add_histogram('CAM BIRADs/%s' % caption, bres, self.cur_epoch)
-            self.board.add_image('CAM BIRADs/%s' % caption, B[0], self.cur_epoch, dataformats='HW')
+            hotmap = 0.5 * X[0] + 0.3 * gray2JET(B[0])
+            self.board.add_histogram('distribution/BIRADs/%s' % caption, bres, self.cur_epoch)
+            self.board.add_image('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
         return merr, berr
