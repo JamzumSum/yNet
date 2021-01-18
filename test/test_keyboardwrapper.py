@@ -8,6 +8,6 @@ class KeyboardInterruptWrapperTest(TestCase):
         print('Successfully react.')
         return 1
 
-    @KeyboardInterruptWrapper(lambda self: self.react)
+    @KeyboardInterruptWrapper(lambda self, *args, **argv: self.react)
     def testSelf(self):
         raise KeyboardInterrupt

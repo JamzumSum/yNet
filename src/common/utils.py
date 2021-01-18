@@ -4,12 +4,12 @@ class KeyboardInterruptWrapper:
     def __init__(self, solution):
         self._s = solution
 
-    def __call__(this, func):
+    def __call__(self, func):
         @wraps(func)
-        def wrapped(self, *args, **kwargs):
-            try: return func(self, *args, **kwargs)
+        def wrapped(*args, **kwargs):
+            try: return func(*args, **kwargs)
             except KeyboardInterrupt:
-                this._s(self)
+                self._s(*args, **kwargs)
         return wrapped
 
 def NoGrad(func):
@@ -19,6 +19,9 @@ def NoGrad(func):
             return func(*args, **kwargs)
     return wrapped
 
+def freeze(tensor, f=0.):
+    return (1 - f) * tensor + f * tensor.detach()
+    
 def cal_parameters(model):
     blank = ' '
     print('-'*90)

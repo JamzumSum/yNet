@@ -10,17 +10,38 @@ from progress.bar import Bar
 from torch.utils.data import DataLoader
 
 from common.trainer import Trainer
-from common.utils import KeyboardInterruptWrapper, NoGrad
+from common.utils import KeyboardInterruptWrapper, NoGrad, freeze
 from toynetv2 import ToyNetV1, ToyNetV2
-
-def freeze(tensor, f=0.):
-    return (1 - f) * tensor + f * tensor.detach()
+    
 class ToyNetTrainer(Trainer):
     @property
     def logHotmap(self):
         return hasattr(self.net, 'hotmap') and bool(self.net.hotmap)
+    
+    def getOptimizer(self):
+        name = self.op_conf.get('name', 'SGD')
+        op: torch.optim.Optimizer = getattr(torch.optim, name)
+        default = self.op_conf.get('default', {})
 
-    @KeyboardInterruptWrapper(lambda self: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
+        if hasattr(self.net, 'seperatedParameters'):
+            paramM, paramB = self.net.seperatedParameters()
+            def merge(d1, d2):
+                d1.update(d2)
+                return d1
+            return op(
+                [merge({'params': p}, self.op_conf.get(i, {})) for i, p in zip(['M', 'B'], [paramM, paramB])], 
+                **default
+            )
+        else: return op(self.net.parameters(), **default)
+
+    def checkGapScheduler(self, optimizer, unanno_only_epoch, last_epoch=-1):
+        if not hasattr(self.net, 'seperatedParameters'): return
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, [
+            lambda e: 1e-4 if e == unanno_only_epoch else 1, 
+            lambda e: 1
+        ], last_epoch)
+
+    @KeyboardInterruptWrapper(lambda self, *l, **d: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
     def train(self, anno, unanno, vanno=None, vunanno=None):
         aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
         uloader = DataLoader(unanno, **self.dataloader.get('unannotated', {}))
@@ -33,6 +54,7 @@ class ToyNetTrainer(Trainer):
             print('Trainer exits before iteration starts.')
             return
         # get scheduler
+        gap_sg = self.checkGapScheduler(op, unanno_only_epoch)
         if 'scheduler' in self.conf: 
             sg = torch.optim.lr_scheduler.ReduceLROnPlateau(op, 'min', **self.conf['scheduler'])
         else: sg = None
@@ -43,15 +65,17 @@ class ToyNetTrainer(Trainer):
             print('Warning: You are using CPU for training. Be careful of its temperature...')
 
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
+            if gap_sg: gap_sg.step(self.cur_epoch)
             bar = Bar('epoch U%03d' % self.cur_epoch, max=len(unanno))
             for X, Ym in uloader:
                 X = X.to(self.device)
                 Ym = Ym.to(self.device)
-                with torch.no_grad():
-                    loss, summary = self.net.loss(X, Ym, piter=self.cur_epoch / self.max_epoch)
-                # loss.backward()
-                # op.step()
-                # self.total_batch += 1
+                loss, summary = self.net.loss(X, Ym, piter=self.piter)
+                loss = freeze(loss, 1 - self.piter)
+                loss.backward()
+                op.step()
+                op.zero_grad()
+                self.total_batch += 1
                 self.logSummary('unannotated', summary, self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
@@ -60,26 +84,32 @@ class ToyNetTrainer(Trainer):
             for X, Ym, Yb in aloader:
                 X = X.to(self.device)
                 Ym = Ym.to(self.device)
-                Yb = None if self.cur_epoch < unanno_only_epoch else Yb.to(self.device) 
-                loss, summary = self.net.loss(X, Ym, Yb, piter=self.cur_epoch / self.max_epoch)
+                if self.cur_epoch < unanno_only_epoch:
+                    loss, summary = self.net.loss(X, Ym, piter=self.piter)
+                else:
+                    Yb = Yb.to(self.device) 
+                    loss, summary = self.net.loss(X, Ym, Yb, a=0.9, piter=self.piter)   # freeze 90% of malignant loss
                 loss.backward()
                 op.step()
+                op.zero_grad()
+                assert not torch.any(torch.isnan(next(self.net.parameters())))   # debug
                 self.total_batch += 1
                 self.logSummary('annotated', summary, self.total_batch)
                 bar.next(Ym.shape[0])
             bar.finish()
 
-            ta_berr = self.score('annotated/trainset', anno)        # trainset score
+            merr, berr = self.score('annotated/trainset', anno)         # trainset score
             self.score('unannotated/trainset', unanno)
-            if vanno: self.score('annotated/validation', vanno)     # validation score
+            if vanno: 
+                merr, berr = self.score('annotated/validation', vanno)  # validation score
             if vunanno: self.score('unannotated/validation', vunanno)
 
-            if ta_berr < self.best_mark:
-                self.best_mark = ta_berr
-                self.save('best', ta_berr)
-            self.save('latest', ta_berr)
+            if merr < self.best_mark:
+                self.best_mark = merr
+                self.save('best', merr)
+            self.save('latest', merr)
 
-            if sg and self.cur_epoch >= unanno_only_epoch: sg.step(ta_berr)
+            if sg and self.cur_epoch >= unanno_only_epoch: sg.step(merr)
 
     @NoGrad
     def score(self, caption, dataset):
@@ -106,26 +136,26 @@ class ToyNetTrainer(Trainer):
                 
         merr = torch.stack(merr).mean()
         mres = torch.cat(mres)
-        self.board.add_scalar('eval/%s/error rate/malignant' % caption, merr, self.cur_epoch)
-        self.board.add_histogram('eval/%s/distribution/malignant' % caption, mres, self.cur_epoch)
+        self.board.add_scalar('err/malignant/%s' % caption, merr, self.cur_epoch)
+        self.board.add_histogram('distribution/malignant/%s' % caption, mres, self.cur_epoch)
 
         X, Ym = dataset[:1][:2]
         res = self.net(X.to(self.device))
         if self.logHotmap:
             M, B, _, Pb = res
-            self.board.add_image('eval/%s/CAM/origin' % caption, X[0], self.cur_epoch)  # [3, H, W]
-            self.board.add_image('eval/%s/CAM/malignant' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
+            self.board.add_image('CAM origin/%s' % caption, X[0], self.cur_epoch)  # [3, H, W]
+            self.board.add_image('CAM malignant/%s' % caption, M[0, 0], self.cur_epoch, dataformats='HW')
         else: _, Pb = res
 
         if not berr: return
         berr = torch.stack(berr).mean()
-        bres = torch.stack(bres)
+        bres = torch.cat(bres)
         absurd = ((bres == 0) * (mres == 1)).sum() + ((bres == 5) * (mres == 0)).sum()  # BIRAD-2 but malignant, BIRAD-5 but benign
         
-        self.board.add_scalar('eval/%s/absurd' % caption, absurd / mres.shape[0], self.cur_epoch)
-        self.board.add_scalar('eval/%s/error rate/BIRADs' % caption, berr, self.cur_epoch)
+        self.board.add_scalar('absurd/%s' % caption, absurd / mres.shape[0], self.cur_epoch)
+        self.board.add_scalar('err/BIRADs/%s' % caption, berr, self.cur_epoch)
         if self.logHotmap:
-            B = (B * torch.softmax(Pb, dim=-1)).sum(dim=1)     # [N, H, W]
-            self.board.add_histogram('eval/%s/CAM/BIRADs' % caption, bres, self.cur_epoch)
-            self.board.add_image('eval/%s/CAM/BIRADs' % caption, B[0], self.cur_epoch, dataformats='HW')
-        return berr
+            B = (B.permute(0, 2, 3, 1) * torch.softmax(Pb, dim=-1)).sum(dim=-1)     # [N, H, W]
+            self.board.add_histogram('CAM BIRADs/%s' % caption, bres, self.cur_epoch)
+            self.board.add_image('CAM BIRADs/%s' % caption, B[0], self.cur_epoch, dataformats='HW')
+        return merr, berr

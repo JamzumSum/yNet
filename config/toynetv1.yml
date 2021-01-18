@@ -10,10 +10,11 @@ training:  # training strategy
   device: cpu
   continue: True
   load_from: latest
-  max_epoch: 100
-  use_unannotated_from: 30  # epoch
+  max_epoch: 80
+  use_unannotation_from: 20  # epoch
 optimizer:
-  Adam:
+  name: Adam
+  default:
     lr: 0.0005
 scheduler:
   factor: 0.2
@@ -22,14 +23,14 @@ scheduler:
   cooldown: 8
 dataloader:
   annotated:
-    batch_size: 8
+    batch_size: 11
     shuffle: True
     drop_last: True
   unannotated:
-    batch_size: 8
+    batch_size: 11
     shuffle: True
   scoring:
-    batch_size: 8
+    batch_size: 11
 paths:
   model_dir: model/toynetv1/focal
   log_dir: log/toynetv1/{date}

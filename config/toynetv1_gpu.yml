@@ -10,10 +10,11 @@ training:  # training strategy
   device: cuda:0
   continue: False
   load_from: latest
-  max_epoch: 100
-  use_annotation_from: 40  # epoch
+  max_epoch: 80
+  use_annotation_from: 20  # epoch
 optimizer:
-  Adam:
+  name: Adam
+  default:
     lr: 0.0005
 scheduler:
   factor: 0.2

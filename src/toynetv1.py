@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from common.unet import UNet
+from common.utils import freeze
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
 
@@ -19,8 +20,8 @@ def focalCE(P, Y, gamma=2., *args, **argv):
     - Y: [N]    NOTE: long
     - gamma: 
     '''
-    gms = torch.pow(1 - P, gamma)           # [N, K]
-    logs = torch.log_softmax(P, dim=-1)     # [N, K]
+    gms = torch.pow(torch.softmax(1 - P, dim=-1), gamma)    # [N, K]
+    logs = torch.log_softmax(P, dim=-1)                     # [N, K]
     return torch.nn.functional.nll_loss(gms * logs, Y, *args, **argv)
 
 class BIRADsUNet(UNet):
@@ -42,21 +43,29 @@ class BIRADsUNet(UNet):
         Bhead = torch.sigmoid(self.BDW(torch.tanh(x9)))
         return Mhead, Bhead
 
+    def seperatedParameters(self):
+        paramAll = self.parameters()
+        paramB = self.BDW.parameters()
+        paramM = (p for p in paramAll if id(p) not in [id(i) for i in paramB])
+        return paramM, paramB
+
 class ToyNetV1(nn.Module):
     mbalance = torch.Tensor([0.3, 0.7])
     bbalance = torch.Tensor([0.03, 0.19, 0.16, 0.2, 0.14, 0.28])
     hotmap = True
 
-    def __init__(self, ishape, K, patch_size, fc=64, a=1.):
+    def __init__(self, ishape, K, patch_size, fc=64):
         nn.Module.__init__(self)
         self.backbone = BIRADsUNet(*ishape, K, fc)
         self.pooling = nn.AvgPool2d(patch_size)
-        self.a = a
 
     def to(self, device, *args, **argv):
         self.mbalance = self.mbalance.to(device, *args, **argv)
         self.bbalance = self.bbalance.to(device, *args, **argv)
         super(ToyNetV1, self).to(device, *args, **argv)
+
+    def seperatedParameters(self):
+        return self.backbone.seperatedParameters()
 
     def forward(self, X):
         '''
@@ -71,11 +80,11 @@ class ToyNetV1(nn.Module):
         Mpatches = self.pooling(Mhead)      # [N, 2, H//P, W//P]
         Bpatches = self.pooling(Bhead)      # [N, K, H//P, W//P]
 
-        Mp = torch.amax(Mpatches, dim=(2, 3))        # [N, 2]
-        Bp = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
-        return Mhead, Bhead, Mp, Bp
+        Pm = torch.amax(Mpatches, dim=(2, 3))        # [N, 2]
+        Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
+        return Mhead, Bhead, Pm, Pb
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def loss(self, X, Ym, Yb=None, a=0., piter=0.):
         '''
         X: [N, ic, H, W]
         Ym: [N], long
@@ -90,8 +99,8 @@ class ToyNetV1(nn.Module):
         if Yb is None: Bloss = 0
         else:
             Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
-            summary['loss/BIRADs focal'] = Bloss.detach()
-        return Mloss + self.a * Bloss, summary
+            summary['loss/BIRADs CE'] = Bloss.detach()
+        return Mloss + Bloss, summary
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)

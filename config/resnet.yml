@@ -1,20 +1,21 @@
 model:      # model constructor
-  model: resnet50
+  model: resnet34   # resnet18, resnet34, resnet50, resnet101, resnet152
   K: 6     # 2, 3, 4a, 4b, 4c, 5
 training:  # training strategy
-  device: cpu
-  continue: True
+  device: cuda:0
+  continue: False
   load_from: latest
   max_epoch: 80
-  use_unannotated_from: 0  # epoch
+  use_annotation_from: 0  # epoch
 optimizer:
-  Adam:
-    lr: 0.001
+  name: Adam
+  default:
+    lr: 0.0005
 scheduler:
-  factor: 0.2
+  factor: 0.8
   patience: 2
   verbose: True
-  cooldown: 8
+  cooldown: 3
 dataloader:
   annotated:
     batch_size: 11
@@ -26,5 +27,5 @@ dataloader:
   scoring:
     batch_size: 11
 paths:
-  model_dir: model/resnet50/
-  log_dir: log/resnet50/{date}
+  model_dir: model/resnet34/
+  log_dir: log/resnet34/{date}

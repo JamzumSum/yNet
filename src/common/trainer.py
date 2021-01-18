@@ -55,7 +55,10 @@ class Trainer:
     @property
     def max_epoch(self):
         return self.training.get('max_epoch', 1)
-
+    @property
+    def piter(self):
+        return self.cur_epoch / self.max_epoch
+        
     def save(self, name, score=None):
         vconf = {
             'cur_epoch': self.cur_epoch, 
@@ -97,10 +100,6 @@ class Trainer:
     def logSummary(self, caption, summary: dict, step=None):
         for k, v in summary.items():
             self.board.add_scalar('summary/%s/%s' % (caption, k), v, step)
-
-    def getOptimizer(self)-> torch.optim.Optimizer:
-        for k, v in self.op_conf.items(): return getattr(torch.optim, k)(self.net.parameters(), **v)
-        raise ValueError('Optimizer is not specified.')
 
     def getScheduler(self, optimizer):
         if 'scheduler' not in self.conf: return None

@@ -6,10 +6,13 @@ Make use of the CAMs.
 * create: 2021-1-11
 '''
 
-from toynetv1 import ToyNetV1, focalCE
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from common.utils import freeze
+from toynetv1 import ToyNetV1, focalCE
+
 
 class JointEstimator(nn.Sequential):
     '''
@@ -31,12 +34,12 @@ class JointEstimator(nn.Sequential):
         return nn.Sequential.forward(self, torch.cat([M, B], dim=1))
 
 class ToyNetV2(ToyNetV1):
-    def __init__(self, ishape, K, patch_size, fc=64, a=1., b=0.5):
-        ToyNetV1.__init__(self, ishape, K, patch_size, fc, a)
+    def __init__(self, ishape, K, patch_size, fc=64, b=0.5):
+        ToyNetV1.__init__(self, ishape, K, patch_size, fc)
         self.Q = JointEstimator(K)
         self.b = b
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def loss(self, X, Ym, Yb=None, a=0., piter=0.):
         '''
         X: [N, ic, H, W]
         Ym: [N], long
@@ -70,4 +73,4 @@ class ToyNetV2(ToyNetV1):
         else:
             Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
             summary['loss/BIRADs focal'] = Bloss.detach()
-        return Mloss + self.a * Bloss - warmup * infoLoss, 
+        return Mloss + (Bloss) - warmup * infoLoss, 
