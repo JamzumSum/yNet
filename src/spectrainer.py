@@ -139,22 +139,28 @@ class ToyNetTrainer(Trainer):
         self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
         self.board.add_scalar('err/malignant/%s' % caption, merr, self.cur_epoch)
         self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
-        self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
 
-        X = dataset[:1][0]
-        res = self.net(X.to(self.device))
+        X = dataset[:1][0].to(self.device)
+        res = self.net(X)
 
         if self.logHotmap:
-            M, B, _, Pb = res
+            M, B, _, bweights = res
             hotmap = 0.5 * X[0] + 0.3 * gray2JET(M[0, 0])
             self.board.add_image('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
             # Now we generate CAM even if dataset is BIRADS-unannotated.
-            B = (B.permute(0, 2, 3, 1) * torch.softmax(Pb, dim=-1)).sum(dim=-1)     # [N, H, W]
+            B = (B.permute(0, 2, 3, 1) * torch.softmax(bweights, dim=-1)).sum(dim=-1)     # [N, H, W]
             hotmap = 0.5 * X[0] + 0.3 * gray2JET(B[0])
             self.board.add_image('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
 
-        if not berr: return merr
+        if berr is None: return merr
+
         berr = berr.mean()
+        # absurd: sum of predicts that are of BIRAD-2 but malignant; of BIRAD-5 but benign
+        # NOTE: the criterion is class-specific. change it once class-map are changed.
+        absurd = ((Pb == 0) * (Pm == 1)).sum() + ((Pb == 5) * (Pm == 0)).sum()
+
+        self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
         self.board.add_scalar('err/BIRADs/%s' % caption, berr, self.cur_epoch)
+        self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
         return merr, berr
             

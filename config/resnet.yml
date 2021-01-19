@@ -8,14 +8,16 @@ training:  # training strategy
   max_epoch: 80
   use_annotation_from: 0  # epoch
 optimizer:
-  name: Adam
-  default:
-    lr: 0.0005
+  - Adam
+  - lr: 0.0005
 scheduler:
   factor: 0.8
   patience: 2
   verbose: True
   cooldown: 3
+branch:
+  default:
+    scheduler: null
 dataloader:
   annotated:
     batch_size: 11
@@ -27,5 +29,5 @@ dataloader:
   scoring:
     batch_size: 11
 paths:
-  model_dir: model/resnet34/
+  model_dir: model/resnet34/test
   log_dir: log/resnet34/{date}

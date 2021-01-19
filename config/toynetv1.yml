@@ -10,8 +10,8 @@ training:  # training strategy
   device: cpu
   continue: True
   load_from: latest
-  max_epoch: 80
-  use_unannotation_from: 20  # epoch
+  max_epoch: 120
+  use_unannotation_from: 30  # epoch
 branch:
   default:
     scheduler: null
