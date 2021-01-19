@@ -13,14 +13,20 @@ training:  # training strategy
   max_epoch: 80
   use_annotation_from: 20  # epoch
 optimizer:
-  name: Adam
-  default:
-    lr: 0.0005
+  - Adam
+  - lr: 0.0005
 scheduler:
   factor: 0.2
   patience: 2
   verbose: True
   cooldown: 8
+branch:
+  default:
+    scheduler: null
+  M: 
+    optimizer:
+      - Adam
+      - lr: 0.00000005
 dataloader:
   annotated:
     batch_size: 11
@@ -33,5 +39,5 @@ dataloader:
     batch_size: 11
     shuffle: True
 paths:
-  model_dir: model/toynetv1/Adam
-  log_dir: log/toynetv1/{date}
+  model_dir: model/toynetv1/seplr
+  log_dir: log/toynetv1/{date}-seplr

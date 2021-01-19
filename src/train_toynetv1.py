@@ -1,6 +1,8 @@
-from spectrainer import ToyNetTrainer, ToyNetV1
-from dataloader import trainValidSplit
 import yaml
+
+from dataloader import trainValidSplit
+from spectrainer import ToyNetTrainer
+from toynet.toynetv1 import ToyNetV1
 
 (ta, tu), (va, vu) = trainValidSplit(8, 2)
 print('annotated train set:', len(ta))

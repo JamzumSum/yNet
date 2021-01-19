@@ -8,8 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from common.unet import UNet
-from common.utils import freeze
+from .unet import UNet
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
 
@@ -84,7 +83,7 @@ class ToyNetV1(nn.Module):
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
         return Mhead, Bhead, Pm, Pb
 
-    def loss(self, X, Ym, Yb=None, a=0., piter=0.):
+    def loss(self, X, Ym, Yb=None, piter=0.):
         '''
         X: [N, ic, H, W]
         Ym: [N], long

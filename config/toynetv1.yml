@@ -12,10 +12,16 @@ training:  # training strategy
   load_from: latest
   max_epoch: 80
   use_unannotation_from: 20  # epoch
-optimizer:
-  name: Adam
+branch:
   default:
-    lr: 0.0005
+    scheduler: null
+  M: 
+    optimizer:
+      - Adam
+      - lr: 0.00000005
+optimizer:
+  - Adam
+  - lr: 0.0005
 scheduler:
   factor: 0.2
   patience: 2
@@ -32,5 +38,5 @@ dataloader:
   scoring:
     batch_size: 11
 paths:
-  model_dir: model/toynetv1/focal
-  log_dir: log/toynetv1/{date}
+  model_dir: model/toynetv1/test
+  log_dir: log/toynetv1/{date}-test

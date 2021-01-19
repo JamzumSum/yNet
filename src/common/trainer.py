@@ -23,7 +23,7 @@ class Trainer:
 
         self.paths = conf.get('paths', {})
         self.training = conf.get('training', {})
-        self.op_conf = conf.get('optimizer', {})
+        self.op_conf = conf.get('optimizer', ('SGD', {}))
         self.dataloader = conf.get('dataloader', {})
         self.model_conf = conf.get('model', {})
 
@@ -100,8 +100,3 @@ class Trainer:
     def logSummary(self, caption, summary: dict, step=None):
         for k, v in summary.items():
             self.board.add_scalar('summary/%s/%s' % (caption, k), v, step)
-
-    def getScheduler(self, optimizer):
-        if 'scheduler' not in self.conf: return None
-        for k, v in self.conf['scheduler']:
-            return getattr(torch.optim.lr_scheduler, k)(optimizer, **v)

@@ -11,8 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from common.utils import freeze
-from toynetv1 import ToyNetV1, focalCE
-
+from .toynetv1 import ToyNetV1, focalCE
 
 class JointEstimator(nn.Sequential):
     '''
