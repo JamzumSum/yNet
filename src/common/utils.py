@@ -3,7 +3,7 @@ import torch
 def freeze(tensor, f=0.):
     return (1 - f) * tensor + f * tensor.detach()
     
-def gray2JET(x, thresh=.6):
+def gray2JET(x, thresh=.5):
     """
     - x: [H, W], NOTE: float 0~1
     - O: [3, H, W], NOTE: BGR, float 0~1
@@ -22,4 +22,4 @@ def gray2JET(x, thresh=.6):
     B = torch.sum(torch.stack(B) * cond, dim=0)
     G = torch.sum(torch.stack(G) * cond, dim=0)
     R = torch.sum(torch.stack(R) * cond, dim=0)
-    return (x < thresh * 255) * torch.stack([R, G, B]) / 255
+    return (x > thresh * 255) * torch.stack([R, G, B]) / 255
