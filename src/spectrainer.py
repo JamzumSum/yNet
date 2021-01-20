@@ -8,7 +8,6 @@ import torch
 import torch.nn.functional as F
 from progress.bar import Bar
 from torch.utils.data import DataLoader
-from itertools import chain
 
 from common.trainer import Trainer
 from common.utils import freeze, gray2JET
@@ -26,13 +25,13 @@ class ToyNetTrainer(Trainer):
         branch: default, M, B
         '''
         branch_conf = self.conf.get('branch', {}).get(branch, {})
-        op_name, op_arg = branch_conf.get('optimizer', ('SGD', {}))
+        op_name, op_arg = branch_conf.get('optimizer', self.op_conf)
         sg_arg = branch_conf.get('scheduler', self.sg_conf)
 
         op: torch.optim.Optimizer = getattr(torch.optim, op_name)
         paramM, paramB = self.net.seperatedParameters()
         param = {
-            'default': chain(paramM, paramB), 
+            'default': paramM, 
             'M': paramM, 
             'B': paramB
         }
@@ -63,7 +62,8 @@ class ToyNetTrainer(Trainer):
             if self.cur_epoch < unanno_only_epoch: Yb = None
             X = X.to(self.device)
             Ym = Ym.to(self.device)
-            loss, summary = self.net.loss(X, Ym, piter=self.piter)
+            if Yb is not None: Yb = Yb.to(self.device)
+            loss, summary = self.net.loss(X, Ym, Yb, piter=self.piter)
             loss = freeze(loss, 1 - self.piter)
             loss.backward()
             for i in ops:
@@ -132,11 +132,7 @@ class ToyNetTrainer(Trainer):
             Pm, merr, Pb, berr = res
 
         merr = merr.mean()
-        # absurd: sum of predicts that are of BIRAD-2 but malignant; of BIRAD-5 but benign
-        # NOTE: the criterion is class-specific. change it once class-map are changed.
-        absurd = ((Pb == 0) * (Pm == 1)).sum() + ((Pb == 5) * (Pm == 0)).sum()
         
-        self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
         self.board.add_scalar('err/malignant/%s' % caption, merr, self.cur_epoch)
         self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
 
@@ -145,11 +141,11 @@ class ToyNetTrainer(Trainer):
 
         if self.logHotmap:
             M, B, _, bweights = res
-            hotmap = 0.5 * X[0] + 0.3 * gray2JET(M[0, 0])
+            hotmap = 0.6 * X[0] + 0.2 * gray2JET(M[0, 0])
             self.board.add_image('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
             # Now we generate CAM even if dataset is BIRADS-unannotated.
             B = (B.permute(0, 2, 3, 1) * torch.softmax(bweights, dim=-1)).sum(dim=-1)     # [N, H, W]
-            hotmap = 0.5 * X[0] + 0.3 * gray2JET(B[0])
+            hotmap = 0.6 * X[0] + 0.2 * gray2JET(B[0])
             self.board.add_image('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
 
         if berr is None: return merr

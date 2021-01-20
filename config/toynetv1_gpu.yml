@@ -10,11 +10,11 @@ training:  # training strategy
   device: cuda:0
   continue: False
   load_from: latest
-  max_epoch: 120
-  use_annotation_from: 30  # epoch
+  max_epoch: 100
+  use_annotation_from: 10  # early stop
 optimizer:
   - Adam
-  - lr: 0.0005
+  - lr: 5.0e-4
 scheduler:
   factor: 0.2
   patience: 2
@@ -23,10 +23,14 @@ scheduler:
 branch:
   default:
     scheduler: null
+    optimizer:
+      - Adam
+      - weight_decay: 1.0e-3
   M: 
     optimizer:
       - Adam
-      - lr: 0.00000005
+      - lr: 5.0e-8
+        weight_decay: 1.0e-3
 dataloader:
   annotated:
     batch_size: 11

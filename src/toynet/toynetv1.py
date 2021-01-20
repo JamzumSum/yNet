@@ -58,10 +58,10 @@ class ToyNetV1(nn.Module):
         self.backbone = BIRADsUNet(*ishape, K, fc)
         self.pooling = nn.AvgPool2d(patch_size)
 
-    def to(self, device, *args, **argv):
-        self.mbalance = self.mbalance.to(device, *args, **argv)
-        self.bbalance = self.bbalance.to(device, *args, **argv)
-        super(ToyNetV1, self).to(device, *args, **argv)
+    def to(self, *args, **argv):
+        self.mbalance = self.mbalance.to(*args, **argv)
+        self.bbalance = self.bbalance.to(*args, **argv)
+        super(ToyNetV1, self).to(*args, **argv)
 
     def seperatedParameters(self):
         return self.backbone.seperatedParameters()

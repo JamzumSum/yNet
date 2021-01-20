@@ -10,23 +10,27 @@ training:  # training strategy
   device: cpu
   continue: True
   load_from: latest
-  max_epoch: 120
-  use_unannotation_from: 30  # epoch
-branch:
-  default:
-    scheduler: null
-  M: 
-    optimizer:
-      - Adam
-      - lr: 0.00000005
+  max_epoch: 100
+  use_unannotation_from: 10  # early stop
 optimizer:
   - Adam
-  - lr: 0.0005
+  - lr: 5.0e-4
 scheduler:
   factor: 0.2
   patience: 2
   verbose: True
   cooldown: 8
+branch:
+  default:
+    scheduler: null
+    optimizer:
+      - Adam
+      - weight_decay: 1.0e-3
+  M: 
+    optimizer:
+      - Adam
+      - lr: 5.0e-8
+        weight_decay: 1.0e-3
 dataloader:
   annotated:
     batch_size: 11

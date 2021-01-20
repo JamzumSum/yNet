@@ -27,6 +27,6 @@ def Batched(func):
         res = [func(*d) for d in loader]
         if not res or res[0] is None: return
         N = len(res[0])
-        res = ([d[i] for d in res] for i in range(N))
+        res = [[d[i] for d in res] for i in range(N)]
         return tuple((torch.cat if d[0].dim() > 0 else torch.stack)(d) for d in res)
     return wrapped
