@@ -29,9 +29,10 @@ class ToyNetTrainer(Trainer):
         sg_arg = branch_conf.get('scheduler', self.sg_conf)
 
         op: torch.optim.Optimizer = getattr(torch.optim, op_name)
-        paramM, paramB = self.net.seperatedParameters()
+        paramM, paramB, paramD = self.net.seperatedParameters()
         param = {
             'default': paramM, 
+            'discriminator': paramD,
             'M': paramM, 
             'B': paramB
         }
@@ -48,7 +49,8 @@ class ToyNetTrainer(Trainer):
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
 
         # get optimizer
-        dop, dsg = self.getBranchOptimizerAndScheduler('default')
+        gop, gsg = self.getBranchOptimizerAndScheduler('default')
+        dop, dsg = self.getBranchOptimizerAndScheduler('discriminator')
         mop, msg = self.getBranchOptimizerAndScheduler('M')
         bop, bsg = self.getBranchOptimizerAndScheduler('B')
         # init tensorboard logger
@@ -64,7 +66,6 @@ class ToyNetTrainer(Trainer):
             Ym = Ym.to(self.device)
             if Yb is not None: Yb = Yb.to(self.device)
             loss, summary = self.net.loss(X, Ym, Yb, piter=self.piter)
-            loss = freeze(loss, 1 - self.piter)
             loss.backward()
             for i in ops:
                 i.step()
@@ -72,21 +73,33 @@ class ToyNetTrainer(Trainer):
             self.total_batch += 1
             self.logSummary(name, summary, self.total_batch)
             bar.next(Ym.shape[0])
+        @Batched
+        def trainDiscriminator(X, Ym, Yb):
+            X = X.to(self.device)
+            Ym = Ym.to(self.device)
+            Yb = Yb.to(self.device)
+            loss = self.net.discriminatorLoss(X, Ym, Yb, piter=self.piter)
+            loss.backward()
+            dop.step()
+            dop.zero_grad()
+            bar.next(Ym.shape[0])
 
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             if self.cur_epoch < unanno_only_epoch: 
-                ops = (dop, )
+                ops = (gop, )
             else:
                 ops = (mop, bop)
 
+            self.net.train()
             bar = Bar('epoch U%03d' % self.cur_epoch, max=len(unanno))
             name = 'unannotated'
             trainInBatch(uloader)
             bar.finish()
 
-            bar = Bar('epoch A%03d' % self.cur_epoch, max=len(anno))
+            bar = Bar('epoch A%03d' % self.cur_epoch, max=2 * len(anno))
             name = 'annotated'
             trainInBatch(aloader)
+            trainDiscriminator(aloader)
             bar.finish()
 
             merr, berr = self.score('annotated/trainset', anno)         # trainset score
@@ -100,8 +113,9 @@ class ToyNetTrainer(Trainer):
                 self.save('best', merr)
             self.save('latest', merr)
 
+            if dsg: dsg.step(0)
             if self.cur_epoch < unanno_only_epoch: 
-                if dsg: dsg.step(merr)
+                if gsg: gsg.step(merr)
             else:
                 if msg: msg.step(merr)
                 if bsg: bsg.step(berr)
@@ -111,6 +125,7 @@ class ToyNetTrainer(Trainer):
         '''
         Calculate accuracy of the given dataset.
         '''
+        self.net.eval()
         @Batched
         def scoresInBatch(X, Ym, Yb=None):
             Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pb is not softmax-ed

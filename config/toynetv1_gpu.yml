@@ -25,7 +25,8 @@ branch:
     scheduler: null
     optimizer:
       - Adam
-      - weight_decay: 1.0e-3
+      - lr: 1.0e-5
+        weight_decay: 1.0e-3
   M: 
     optimizer:
       - Adam

@@ -99,4 +99,4 @@ class Trainer:
         
     def logSummary(self, caption, summary: dict, step=None):
         for k, v in summary.items():
-            self.board.add_scalar('summary/%s/%s' % (caption, k), v, step)
+            self.board.add_scalar('%s/%s' % (k, caption), v, step)

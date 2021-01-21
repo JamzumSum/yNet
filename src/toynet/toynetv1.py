@@ -7,7 +7,9 @@ A toy implement for classifying benign/malignant and BIRADs
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from common.utils import freeze
 
+from .discriminator import ConsistancyDiscriminator as CD
 from .unet import UNet
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
@@ -50,13 +52,15 @@ class BIRADsUNet(UNet):
 
 class ToyNetV1(nn.Module):
     mbalance = torch.Tensor([0.3, 0.7])
-    bbalance = torch.Tensor([0.03, 0.19, 0.16, 0.2, 0.14, 0.28])
+    bbalance = torch.Tensor([0.13, 0.19, 0.16, 0.1, 0.14, 0.28])
     hotmap = True
 
     def __init__(self, ishape, K, patch_size, fc=64):
         nn.Module.__init__(self)
+        self.K = K
         self.backbone = BIRADsUNet(*ishape, K, fc)
         self.pooling = nn.AvgPool2d(patch_size)
+        self.D = CD(K)
 
     def to(self, *args, **argv):
         self.mbalance = self.mbalance.to(*args, **argv)
@@ -64,7 +68,8 @@ class ToyNetV1(nn.Module):
         super(ToyNetV1, self).to(*args, **argv)
 
     def seperatedParameters(self):
-        return self.backbone.seperatedParameters()
+        m, d = self.backbone.seperatedParameters()
+        return m, d, self.D.parameters()
 
     def forward(self, X):
         '''
@@ -83,6 +88,19 @@ class ToyNetV1(nn.Module):
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
         return Mhead, Bhead, Pm, Pb
 
+    def discriminatorLoss(self, X, Ym, Yb, piter=0.):
+        N = Ym.shape[0]
+        with torch.no_grad():
+            _, _, Pm, Pb = self.forward(X)
+        loss = self.D.loss(Pm, Pb, torch.zeros(N, 1))
+        loss = freeze(loss, piter)
+        loss = loss + self.D.loss(
+            F.one_hot(Ym, num_classes=2), 
+            F.one_hot(Yb, num_classes=self.K), 
+            torch.ones(N, 1)
+        )
+        return loss
+
     def loss(self, X, Ym, Yb=None, piter=0.):
         '''
         X: [N, ic, H, W]
@@ -90,16 +108,24 @@ class ToyNetV1(nn.Module):
         Yb: [N], long
         '''
         
-        _, _, Pm, Pb = self.forward(X)      # ToyNetV1 discards two CAMs
-        Mloss = focalCE(Pm, Ym, gamma=2 * piter, weight=self.mbalance)    # use [N, 2] to cal. CE
+        M, B, Pm, Pb = self.forward(X)      # ToyNetV1 does not constrain between the two CAMs
+        Mloss = focalCE(Pm, Ym, gamma=2 * piter, weight=self.mbalance)
+        Mpenalty = F.mse_loss(M - 0.5, torch.zeros_like(M))
+        consistency = self.D.forward(Pm, Pb).mean()
+        loss = Mloss + 0.2 * Mpenalty + 0.5 * (1 - consistency)
+
         summary = {
-            'loss/malignant focal': Mloss.detach()
+            'loss/malignant focal': Mloss.detach(), 
+            'penalty/CAM_malignant': Mpenalty.detach(), 
+            'consistency': consistency.detach()
         }
-        if Yb is None: Bloss = 0
-        else:
-            Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
-            summary['loss/BIRADs CE'] = Bloss.detach()
-        return Mloss + Bloss, summary
+        if Yb is not None: 
+            Bloss = focalCE(Pb, Yb, gamma=2 * piter, weight=self.bbalance)
+            Bpenalty = F.mse_loss(B - 0.5, torch.zeros_like(B))
+            loss = loss + Bloss + 0.2 * Bpenalty
+            summary['loss/BIRADs focal'] = Bloss.detach()
+            summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
+        return loss, summary
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)
