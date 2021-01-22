@@ -26,13 +26,12 @@ class ConsistancyDiscriminator(nn.Sequential):
         # but for the non-linear f(x) applied on the Linear output, f(0) should be 0.
         return 1 - torch.pow(x, 2)
 
-    def loss(self, Pm, Pb, Y, training=None):
+    def loss(self, Pm, Pb, Y):
         '''
         Pm: [N, 2]
         Pb: [N, K]
         Y: [N, 1]
         '''
-        if training is None: training = self.training
         return nn.functional.mse_loss(
-            self.forward(Pm, Pb), Y if training else 1 - Y
+            self.forward(Pm, Pb), Y
         )

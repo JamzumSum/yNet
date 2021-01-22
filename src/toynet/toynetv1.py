@@ -92,12 +92,12 @@ class ToyNetV1(nn.Module):
         N = Ym.shape[0]
         with torch.no_grad():
             _, _, Pm, Pb = self.forward(X)
-        loss = self.D.loss(Pm, Pb, torch.zeros(N, 1))
+        loss = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
         loss = freeze(loss, piter)
         loss = loss + self.D.loss(
-            F.one_hot(Ym, num_classes=2), 
-            F.one_hot(Yb, num_classes=self.K), 
-            torch.ones(N, 1)
+            F.one_hot(Ym, num_classes=2).type_as(Pm), 
+            F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
+            torch.ones(N, 1).to(X.device)
         )
         return loss
 

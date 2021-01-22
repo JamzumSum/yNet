@@ -6,20 +6,24 @@ model:      # model constructor
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_size: 32
   fc: 16
+
 training:  # training strategy
   device: cuda:0
   continue: False
   load_from: latest
   max_epoch: 100
-  use_annotation_from: 10  # early stop
+  use_annotation_from: 15
+
 optimizer:
   - Adam
   - lr: 5.0e-4
+
 scheduler:
   factor: 0.2
   patience: 2
   verbose: True
   cooldown: 8
+
 branch:
   default:
     scheduler: null
@@ -32,6 +36,12 @@ branch:
       - Adam
       - lr: 5.0e-8
         weight_decay: 1.0e-3
+  discriminator:
+    scheduler:
+      factor: 0.1
+      patience: 10
+      cooldown: 0
+
 dataloader:
   annotated:
     batch_size: 11
@@ -43,6 +53,7 @@ dataloader:
   scoring:
     batch_size: 11
     shuffle: True
+    
 paths:
   model_dir: model/toynetv1/seplr
   log_dir: log/toynetv1/{date}-seplr

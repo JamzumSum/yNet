@@ -18,7 +18,7 @@ def check_annotation():
                 print(os.path.join(DD, i))
 
 def FSCache():
-    imgs = []; isM = []; BIRADs = []
+    X = []; Ym = []; Yb = []
     bans = mans = None
     with open(os.path.join(D, 'BIRADs.yml')) as f: bans = yaml.safe_load(f)
     with open(os.path.join(D, 'malignant.yml')) as f: mans = yaml.safe_load(f)
@@ -31,27 +31,30 @@ def FSCache():
             img = cv.imread(DDP)
             birad = BIRAD_NAME.index('2' if dataset == 'case' else bans[i[:-4]])
 
-            imgs.append(img)
-            isM.append(mans[i[:-4]] if dataset == 'B' else 0)
-            BIRADs.append(birad)
+            X.append(img)
+            Ym.append(mans[i[:-4]] if dataset == 'B' else 0)
+            Yb.append(birad)
 
-    imgs = torch.from_numpy(np.array(imgs))         # [N, H, W, C]
-    isM = torch.from_numpy(np.array(isM))
-    BIRADs = torch.from_numpy(np.array(BIRADs))
+    s = sorted(zip(X, Ym, Yb), key=lambda t: t[2])
+    X, Ym, Yb = ([t[i] for t in s] for i in range(3))
+
+    X = torch.from_numpy(np.array(X))         # [N, H, W, C]
+    Ym = torch.from_numpy(np.array(Ym))
+    Yb = torch.from_numpy(np.array(Yb))
     
-    imgs = imgs.permute(0, 3, 1, 2)     # [N, C, H, W]
+    X = X.permute(0, 3, 1, 2)     # [N, C, H, W]
 
-    assert imgs.shape[1] == 3
+    assert X.shape[1] == 3
     torch.save(
         {
-            'X': imgs / 255, 
-            'Ym': isM,
-            'Ybirad': BIRADs, 
+            'X': X / 255, 
+            'Ym': Ym,
+            'Ybirad': Yb, 
             'cls_name': BIRAD_NAME
         }, 
         os.path.join(D, '../annotated.pt')
     )
-    print('%d items cached.' % imgs.shape[0])
+    print('%d items cached.' % X.shape[0])
 
 def WSCache():
     DD = os.path.join(D, 'XPB')
@@ -63,17 +66,20 @@ def WSCache():
         X.append(cv.imread(os.path.join(DD, i)))
         Ym.append(mans[i[:-4]])
 
-    imgs = torch.from_numpy(np.array(X)).permute(0, 3, 1, 2)    # [N, C, H, W]
-    isM = torch.from_numpy(np.array(Ym))
+    s = sorted(zip(X, Ym), key=lambda t: t[1])
+    X, Ym = ([t[i] for t in s] for i in range(2))
+
+    X = torch.from_numpy(np.array(X)).permute(0, 3, 1, 2)    # [N, C, H, W]
+    Ym = torch.from_numpy(np.array(Ym))
     
     torch.save(
         {
-            'X': imgs / 255, 
-            'Ym': isM
+            'X': X / 255, 
+            'Ym': Ym
         }, 
         os.path.join(D, '../unannotated.pt')
     )
-    print('%d items cached.' % imgs.shape[0])
+    print('%d items cached.' % X.shape[0])
 
 if __name__ == "__main__":
     # check_annotation()
