@@ -27,17 +27,17 @@ def focalCE(P, Y, gamma=2., *args, **argv):
 
 class BIRADsUNet(UNet):
     '''
-    [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
+    [N, ic, H, W] -> [N, 1, H, W], [N, K, H, W]
     '''
     def __init__(self, ic, ih, iw, K, fc=64):
-        UNet.__init__(self, ic, ih, iw, 2, fc)
+        UNet.__init__(self, ic, ih, iw, 1, fc)
         self.BDW = nn.Conv2d(fc, K, 1)
 
     def forward(self, X):
         '''
         X: [N, ic, H, W]
         return: 
-        - benign/malignant Class Activation Mapping     [N, 2, H, W]
+        - benign/malignant Class Activation Mapping     [N, 1, H, W]
         - BIRADs CAM                    [N, H, W, K]
         '''
         x9, Mhead = UNet.forward(self, X)
@@ -51,8 +51,8 @@ class BIRADsUNet(UNet):
         return paramM, paramB
 
 class ToyNetV1(nn.Module):
-    mbalance = torch.Tensor([0.3, 0.7])
-    bbalance = torch.Tensor([0.13, 0.19, 0.16, 0.1, 0.14, 0.28])
+    mbalance = torch.Tensor([0.4, 0.6])
+    bbalance = torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1])
     hotmap = True
 
     def __init__(self, ishape, K, patch_size, fc=64):
@@ -75,16 +75,16 @@ class ToyNetV1(nn.Module):
         '''
         X: [N, ic, H, W]
         return: 
-        - benign/malignant Class Activation Mapping     [N, 2, H, W]
+        - benign/malignant Class Activation Mapping     [N, 1, H, W]
         - BIRADs CAM                    [N, H, W, K]
-        - malignant confidence          [N, 2]
+        - malignant confidence          [N, 1]
         - BIRADs prediction vector      [N, K]
         '''
         Mhead, Bhead = self.backbone(X)
-        Mpatches = self.pooling(Mhead)      # [N, 2, H//P, W//P]
+        Mpatches = self.pooling(Mhead)      # [N, 1, H//P, W//P]
         Bpatches = self.pooling(Bhead)      # [N, K, H//P, W//P]
 
-        Pm = torch.amax(Mpatches, dim=(2, 3))        # [N, 2]
+        Pm = torch.amax(Mpatches, dim=(2, 3))        # [N, 1]
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
         return Mhead, Bhead, Pm, Pb
 
@@ -95,7 +95,7 @@ class ToyNetV1(nn.Module):
         loss = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
         loss = freeze(loss, piter)
         loss = loss + self.D.loss(
-            F.one_hot(Ym, num_classes=2).type_as(Pm), 
+            Ym.unsqueeze(1), 
             F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
             torch.ones(N, 1).to(X.device)
         )
@@ -108,11 +108,19 @@ class ToyNetV1(nn.Module):
         Yb: [N], long
         '''
         
-        M, B, Pm, Pb = self.forward(X)      # ToyNetV1 does not constrain between the two CAMs
-        Mloss = focalCE(Pm, Ym, gamma=2 * piter, weight=self.mbalance)
-        Mpenalty = F.mse_loss(M - 0.5, torch.zeros_like(M))
+        M, B, Pm, Pb = self.forward(X)      
+        Pbm_fake = torch.cat([1 - Pm, Pm], dim=1)
+        # ToyNetV1 does not constrain between the two CAMs
+        # But only constrain according to their own values, if necessary
+        penaltyfunc = lambda x: 0.25 - ((x - .5) ** 2).mean()
+
+        Mloss = focalCE(Pbm_fake, Ym, gamma=2 * piter, weight=self.mbalance)
+        loss = Mloss
+        Mpenalty = penaltyfunc(M)
+        penalty = Mpenalty
+
+        # But ToyNetV1 can constrain between the probability distributions Pm & Pb.
         consistency = self.D.forward(Pm, Pb).mean()
-        loss = Mloss + 0.2 * Mpenalty + 0.5 * (1 - consistency)
 
         summary = {
             'loss/malignant focal': Mloss.detach(), 
@@ -121,11 +129,13 @@ class ToyNetV1(nn.Module):
         }
         if Yb is not None: 
             Bloss = focalCE(Pb, Yb, gamma=2 * piter, weight=self.bbalance)
-            Bpenalty = F.mse_loss(B - 0.5, torch.zeros_like(B))
-            loss = loss + Bloss + 0.2 * Bpenalty
+            Bpenalty = penaltyfunc(B)
+            loss += Bloss
+            penalty += 0.5 * Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return loss, summary
+
+        return loss + penalty + (1 - consistency), summary
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)

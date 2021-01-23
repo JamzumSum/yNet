@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 def count(longT):
-    return [int((longT == i).sum()) for i in range(int(longT.max()))]
+    return [int((longT == i).sum()) for i in range(int(longT.max()) + 1)]
 
 class Annotated(TensorDataset):
     '''

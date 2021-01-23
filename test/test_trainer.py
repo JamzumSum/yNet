@@ -2,9 +2,9 @@ import os
 from unittest import TestCase
 
 import yaml
-from spectrainer import ToyNetTrainer, ToyNetV1
-from common.utils import cal_parameters
-
+from spectrainer import ToyNetTrainer
+from toynet.toynetv1 import ToyNetV1
+from utils import cal_parameters
 
 class TrainerFunctionTest(TestCase):
 

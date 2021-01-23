@@ -1,5 +1,5 @@
 from unittest import TestCase
-from common.utils import KeyboardInterruptWrapper
+from common.decorators import KeyboardInterruptWrapper
 
 class KeyboardInterruptWrapperTest(TestCase):
 

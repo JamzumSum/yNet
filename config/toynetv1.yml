@@ -54,5 +54,5 @@ dataloader:
     batch_size: 11
     
 paths:
-  model_dir: model/toynetv1/test
-  log_dir: log/toynetv1/test
+  model_dir: model/toynetv1/tmp
+  log_dir: log/toynetv1/tmp

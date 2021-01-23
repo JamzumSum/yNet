@@ -129,7 +129,7 @@ class ToyNetTrainer(Trainer):
         @Batched
         def scoresInBatch(X, Ym, Yb=None):
             Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pb is not softmax-ed
-            Pm = torch.argmax(Pm, dim=-1).float()
+            Pm = torch.round(Pm).squeeze(1)
             merr = F.l1_loss(Pm, Ym.to(self.device))
             if Yb is None: return Pm, merr
         
@@ -168,6 +168,7 @@ class ToyNetTrainer(Trainer):
         berr = berr.mean()
         # absurd: sum of predicts that are of BIRAD-2 but malignant; of BIRAD-5 but benign
         # NOTE: the criterion is class-specific. change it once class-map are changed.
+        # Expected to be substituted by the consistency indicated by the discriminator.
         absurd = ((Pb == 0) * (Pm == 1)).sum() + ((Pb == 5) * (Pm == 0)).sum()
 
         self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
