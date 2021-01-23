@@ -16,14 +16,32 @@ assert hasattr(torch, 'amax')   # make sure amax is supported
 
 def focalCE(P, Y, gamma=2., *args, **argv):
     '''
-    focal loss for classification.
+    focal loss for classification. nll_loss implement
     - P: [N, K] NOTE: not softmax-ed
     - Y: [N]    NOTE: long
     - gamma: 
     '''
-    gms = torch.pow(torch.softmax(1 - P, dim=-1), gamma)    # [N, K]
-    logs = torch.log_softmax(P, dim=-1)                     # [N, K]
-    return torch.nn.functional.nll_loss(gms * logs, Y, *args, **argv)
+    pt = torch.softmax(P, dim=-1)   # [N, K]
+    gms = (1 - pt) ** gamma         # [N, K]
+    return F.nll_loss(gms * pt.log(), Y, *args, **argv)
+
+def focalBCE(P, Y, gamma=2., K=-1, weight=None):
+    '''
+    focal loss for classification. BCELoss implement
+    - P: [N, K] NOTE: not softmax-ed when K != 1
+    - Y: [N]    NOTE: long
+    - gamma: 
+    '''
+    if K == 1:
+        # This is a sigmoid output that needn't softmax.
+        bce = F.binary_cross_entropy(P.squeeze(1), Y.float(), reduction='none')
+    else:
+        # This is a 'pre-distribution' that needs softmax.
+        Y = F.one_hot(Y, num_classes=K).float()
+        bce = F.binary_cross_entropy_with_logits(P, Y, pos_weight=weight, reduction='none')
+    pt = torch.exp(-bce)            # [N, K]
+    gms = (1 - pt) ** gamma         # [N, K]
+    return (gms * pt).mean()
 
 class BIRADsUNet(UNet):
     '''
@@ -101,41 +119,58 @@ class ToyNetV1(nn.Module):
         )
         return loss
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def _loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None):
         '''
-        X: [N, ic, H, W]
-        Ym: [N], long
-        Yb: [N], long
+        Protected for classes inherit from ToyNetV1.
+        return: Original result, M-branch losses, B-branch losses, consistency.
         '''
-        
-        M, B, Pm, Pb = self.forward(X)      
-        Pbm_fake = torch.cat([1 - Pm, Pm], dim=1)
+        res = self.forward(X)
+        M, B, Pm, Pb = res
         # ToyNetV1 does not constrain between the two CAMs
-        # But only constrain according to their own values, if necessary
+        # But may constrain on their own values, if necessary
         penaltyfunc = lambda x: 0.25 - ((x - .5) ** 2).mean()
 
-        Mloss = focalCE(Pbm_fake, Ym, gamma=2 * piter, weight=self.mbalance)
-        loss = Mloss
+        Mloss = focalBCE(Pm, Ym, K=1, gamma=2 * piter)
         Mpenalty = penaltyfunc(M)
-        penalty = Mpenalty
-
+        zipM = (Mloss, Mpenalty)
         # But ToyNetV1 can constrain between the probability distributions Pm & Pb.
         consistency = self.D.forward(Pm, Pb).mean()
 
+        if Yb is None: zipB = None
+        else:
+            Bloss = focalBCE(Pb, Yb, K=self.K, gamma=2 * piter, weight=self.bbalance)
+            Bpenalty = penaltyfunc(B)
+            zipB = (Bloss, Bpenalty)
+
+        return res, zipM, zipB, consistency
+
+    def lossWithResult(self, *args, **argv):
+        res = self._loss(*args, **argv)
+        _, zipM, zipB, consistency = res
+        Mloss, Mpenalty = zipM
         summary = {
             'loss/malignant focal': Mloss.detach(), 
             'penalty/CAM_malignant': Mpenalty.detach(), 
             'consistency': consistency.detach()
         }
-        if Yb is not None: 
-            Bloss = focalCE(Pb, Yb, gamma=2 * piter, weight=self.bbalance)
-            Bpenalty = penaltyfunc(B)
+        loss = Mloss
+        penalty = Mpenalty
+        if zipB:
+            Bloss, Bpenalty = zipB
             loss += Bloss
             penalty += 0.5 * Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
+        return res, loss + 4 * penalty + (1 - consistency), summary
 
-        return loss + penalty + (1 - consistency), summary
+    def loss(self, *args, **argv):
+        '''
+        X: [N, ic, H, W]
+        Ym: [N], long
+        Yb: [N], long
+        piter: float in (0, 1)
+        '''
+        return self.lossWithResult(*args, **argv)[1:]
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)

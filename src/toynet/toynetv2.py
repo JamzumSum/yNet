@@ -7,13 +7,14 @@ Make use of the CAMs.
 '''
 
 from itertools import chain
+from math import exp as mathexp
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from common.utils import freeze
 
-from .toynetv1 import ToyNetV1, focalCE
+from .toynetv1 import ToyNetV1, focalCE, focalBCE
 
 
 class JointEstimator(nn.Sequential):
@@ -56,37 +57,40 @@ class ToyNetV2(ToyNetV1):
 
     def seperatedParameters(self):
         paramM, paramB = self.backbone.seperatedParameters()
-        return paramM, chain(paramB, self.Q.parameters())
+        return paramM, chain(paramB, self.Q.parameters()), self.D.parameters()
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def _loss(self, X, Ym, Yb=None, piter=0.):
         '''
         X: [N, ic, H, W]
         Ym: [N], long
         Yb: [N], long
         piter: current iter times / total iter times
         '''
-        M, B, Pm, Pb = self.forward(X)
-        Mloss = focalCE(torch.cat([1 - Pm, Pm], dim=-1), Ym, gamma=2 * piter, weight=self.mbalance)
+        res, zipM, zipB, consistency = ToyNetV1._loss(self, X, Ym, Yb, piter)
+        M, B, _, _ = res
         
         # M needs softmax for malignant/bengin exclude each other even if multiple tumors are detected.
         # But B needs no softmax in fact for BIRADs can be actually all the classes the tumors are.
         # But for simplifying the problem, BIRADs classification is treated as single-class task now.
         M = torch.softmax(M, dim=1)
         B = torch.softmax(B, dim=1)
-        M = M[:, 1:2]   # get channel of class 1. [N, 1, H, W]
 
-        Q = self.Q(M, B)                                # [N, K, H, W]
-        info = Q * torch.log(Q / B / M.expand_as(B))    # [N, K, H, W]
-        info = torch.asum(info, dim=(1, 2, 3))          # [N]
-        info = torch.mean(info)
-        warmup = self.b * torch.exp(-5 * (1 - piter))
+        Q = self.Q(M, B)                            # [N, K, H, W]
+        info = Q * (Q / B / M.expand_as(B)).log()   # [N, K, H, W]
+        info = info.asum(dim=(1, 2, 3))             # [N]
+        info = info.mean()
 
-        summary = {
-            'loss/malignant CE': Mloss.detach(), 
-            'likelihood/mutual info': info.detach()
-        }
-        if Yb is None: Bloss = 0
-        else:
-            Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
-            summary['loss/BIRADs CE'] = Bloss.detach()
-        return Mloss + (Bloss) - warmup * info, summary
+        return res, zipM, zipB, (consistency, info)
+
+    def loss(self, X, Ym, Yb=None, piter=0.):
+        '''
+        X: [N, ic, H, W]
+        Ym: [N], long
+        Yb: [N], long
+        piter: float in (0, 1)
+        '''
+        res, loss, summary = self.lossWithResult(X, Ym, Yb, piter)
+        info = res[-1][1]
+        warmup = self.b * mathexp(-5 * (1 - piter))
+
+        return loss - warmup * info, summary
