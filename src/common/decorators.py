@@ -23,8 +23,8 @@ def NoGrad(func):
 
 def Batched(func):
     @wraps(func)
-    def wrapped(loader):
-        res = [func(*d) for d in loader]
+    def wrapped(loader, *args, **kwargs):
+        res = [func(*d, *args, **kwargs) for d in loader]
         if not res or res[0] is None: return
         N = len(res[0])
         res = [[d[i] for d in res] for i in range(N)]

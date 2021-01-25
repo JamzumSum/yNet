@@ -10,7 +10,7 @@ from progress.bar import Bar
 from torch.utils.data import DataLoader
 
 from common.trainer import Trainer
-from common.utils import freeze, gray2JET
+from common.utils import freeze, gray2JET, ConfusionMatrix
 from common.decorators import KeyboardInterruptWrapper, NoGrad, Batched
 from utils import update_default
     
@@ -47,6 +47,7 @@ class ToyNetTrainer(Trainer):
         aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
         uloader = DataLoader(unanno, **self.dataloader.get('unannotated', {}))
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
+        annoMdistrib = anno.getDistribution(1)
 
         # get optimizer
         gop, gsg = self.getBranchOptimizerAndScheduler('default')
@@ -59,13 +60,12 @@ class ToyNetTrainer(Trainer):
         if self.device.type == 'cpu':
             print('Warning: You are using CPU for training. Be careful of its temperature...')
 
-        @Batched
-        def trainInBatch(X, Ym, Yb=None):
+        def trainInBatch(X, Ym, Yb=None, name='', mweight=None, bweight=None):
             if self.cur_epoch < unanno_only_epoch: Yb = None
             X = X.to(self.device)
             Ym = Ym.to(self.device)
             if Yb is not None: Yb = Yb.to(self.device)
-            loss, summary = self.net.loss(X, Ym, Yb, piter=self.piter)
+            loss, summary = self.net.loss(X, Ym, Yb, self.piter, mweight, bweight)
             loss.backward()
             for i in ops:
                 i.step()
@@ -73,7 +73,6 @@ class ToyNetTrainer(Trainer):
             self.total_batch += 1
             self.logSummary(name, summary, self.total_batch)
             bar.next(Ym.shape[0])
-        @Batched
         def trainDiscriminator(X, Ym, Yb):
             X = X.to(self.device)
             Ym = Ym.to(self.device)
@@ -91,15 +90,10 @@ class ToyNetTrainer(Trainer):
                 ops = (mop, bop)
 
             self.net.train()
-            bar = Bar('epoch U%03d' % self.cur_epoch, max=len(unanno))
-            name = 'unannotated'
-            trainInBatch(uloader)
-            bar.finish()
-
-            bar = Bar('epoch A%03d' % self.cur_epoch, max=2 * len(anno))
-            name = 'annotated'
-            trainInBatch(aloader)
-            trainDiscriminator(aloader)
+            bar = Bar('epoch %03d' % self.cur_epoch, max=len(unanno) + 2 * len(anno))
+            Batched(trainInBatch)(uloader, name='unannotated', mweight=unanno.distribution)
+            Batched(trainInBatch)(aloader, name='annotated', mweight=anno.distribution, bweight=annoMdistrib)
+            Batched(trainDiscriminator)(aloader)
             bar.finish()
 
             merr, berr = self.score('annotated/trainset', anno)         # trainset score
@@ -123,49 +117,52 @@ class ToyNetTrainer(Trainer):
     @NoGrad
     def score(self, caption, dataset):
         '''
-        Calculate accuracy of the given dataset.
+        Score and evaluate the given dataset.
         '''
         self.net.eval()
-        @Batched
+        bcm = ConfusionMatrix(self.net.K)
+        mcm = ConfusionMatrix(2)
+
         def scoresInBatch(X, Ym, Yb=None):
             Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pb is not softmax-ed
             Pm = torch.round(Pm).squeeze(1)
-            merr = F.l1_loss(Pm, Ym.to(self.device))
-            if Yb is None: return Pm, merr
+            mcm.add(Pm, Ym)
+            if Yb is None: return Pm
         
-            be = torch.argmax(Pb, -1) != Yb.to(self.device) # but argmax is enough :D
-            Pb = torch.argmax(Pb, dim=-1)
-            berr = be.float().mean()
-            return Pm, merr, Pb, berr
+            Pb = torch.argmax(Pb, dim=-1)   # but argmax is enough :D
+            bcm.add(Pb, Yb)
+            return Pm, Pb
         
         loader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
-        res = scoresInBatch(loader)
-        if len(res) == 2:
-            Pm, merr = res
+        res = Batched(scoresInBatch)(loader)
+        if len(res) == 1:
+            (Pm, ) = res
             Pb = berr = None
-        elif len(res) == 4:
-            Pm, merr, Pb, berr = res
-
-        merr = merr.mean()
+        elif len(res) == 2:
+            Pm, Pb = res
+            berr = bcm.err()
+        merr = mcm.err()
         
         self.board.add_scalar('err/malignant/%s' % caption, merr, self.cur_epoch)
+        self.board.add_scalar('f1/malignant/%s' % caption, mcm.fscore(), self.cur_epoch)
+        self.board.add_image('ConfusionMatrix/malignant/%s' % caption, mcm.m, self.cur_epoch, dataformats='HW')
         self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
 
-        X = dataset[:1][0].to(self.device)
+        torch.randint()
+        X = next(loader)[0].to(self.device)
         res = self.net(X)
 
         if self.logHotmap:
             M, B, _, bweights = res
-            hotmap = 0.6 * X[0] + 0.2 * gray2JET(M[0, 0])
-            self.board.add_image('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
+            hotmap = 0.6 * X + 0.2 * gray2JET(M[:, 0])
+            self.board.add_images('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
             # Now we generate CAM even if dataset is BIRADS-unannotated.
             B = (B.permute(0, 2, 3, 1) * torch.softmax(bweights, dim=-1)).sum(dim=-1)     # [N, H, W]
-            hotmap = 0.6 * X[0] + 0.2 * gray2JET(B[0])
-            self.board.add_image('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
+            hotmap = 0.6 * X + 0.2 * gray2JET(B)
+            self.board.add_images('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
 
         if berr is None: return merr
 
-        berr = berr.mean()
         # absurd: sum of predicts that are of BIRAD-2 but malignant; of BIRAD-5 but benign
         # NOTE: the criterion is class-specific. change it once class-map are changed.
         # Expected to be substituted by the consistency indicated by the discriminator.
@@ -173,6 +170,8 @@ class ToyNetTrainer(Trainer):
 
         self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
         self.board.add_scalar('err/BIRADs/%s' % caption, berr, self.cur_epoch)
+        self.board.add_scalar('f1/BIRADs/%s' % caption, bcm.fscore(), self.cur_epoch)
+        self.board.add_image('ConfusionMatrix/BIRADs/%s' % caption, bcm.m, self.cur_epoch, dataformats='HW')
         self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
         return merr, berr
             

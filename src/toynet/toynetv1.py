@@ -34,7 +34,8 @@ def focalBCE(P, Y, gamma=2., K=-1, weight=None):
     '''
     if K == 1:
         # This is a sigmoid output that needn't softmax.
-        bce = F.binary_cross_entropy(P.squeeze(1), Y.float(), reduction='none')
+        if weight is not None: weight = weight[Y]
+        bce = F.binary_cross_entropy(P.squeeze(1), Y.float(), weight=weight, reduction='none')
     else:
         # This is a 'pre-distribution' that needs softmax.
         Y = F.one_hot(Y, num_classes=K).float()
@@ -69,8 +70,6 @@ class BIRADsUNet(UNet):
         return paramM, paramB
 
 class ToyNetV1(nn.Module):
-    mbalance = torch.Tensor([0.4, 0.6])
-    bbalance = torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1])
     hotmap = True
 
     def __init__(self, ishape, K, patch_size, fc=64):
@@ -111,7 +110,7 @@ class ToyNetV1(nn.Module):
         with torch.no_grad():
             _, _, Pm, Pb = self.forward(X)
         loss = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
-        loss = freeze(loss, piter)
+        loss = freeze(loss, piter ** 2)
         loss = loss + self.D.loss(
             Ym.unsqueeze(1), 
             F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
@@ -130,7 +129,7 @@ class ToyNetV1(nn.Module):
         # But may constrain on their own values, if necessary
         penaltyfunc = lambda x: 0.25 - ((x - .5) ** 2).mean()
 
-        Mloss = focalBCE(Pm, Ym, K=1, gamma=2 * piter)
+        Mloss = focalBCE(Pm, Ym, K=1, gamma=2 * piter, weight=mweight)
         Mpenalty = penaltyfunc(M)
         zipM = (Mloss, Mpenalty)
         # But ToyNetV1 can constrain between the probability distributions Pm & Pb.
@@ -138,7 +137,7 @@ class ToyNetV1(nn.Module):
 
         if Yb is None: zipB = None
         else:
-            Bloss = focalBCE(Pb, Yb, K=self.K, gamma=2 * piter, weight=self.bbalance)
+            Bloss = focalBCE(Pb, Yb, K=self.K, gamma=2 * piter, weight=bweight)
             Bpenalty = penaltyfunc(B)
             zipB = (Bloss, Bpenalty)
 
@@ -169,6 +168,8 @@ class ToyNetV1(nn.Module):
         Ym: [N], long
         Yb: [N], long
         piter: float in (0, 1)
+        mweight: bengin/malignant weights
+        bweight: BIRADs weights
         '''
         return self.lossWithResult(*args, **argv)[1:]
 

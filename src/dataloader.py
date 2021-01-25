@@ -10,7 +10,19 @@ from torch.utils.data import DataLoader, TensorDataset
 def count(longT):
     return [int((longT == i).sum()) for i in range(int(longT.max()) + 1)]
 
-class Annotated(TensorDataset):
+class TensorDatasetWithDistribution(TensorDataset):
+    def __init__(self, countOn=-1, *tensors):
+        TensorDataset.__init__(self, *tensors)
+        self._c = countOn
+
+    @property
+    def distribution(self): 
+        if not hasattr(self, '_d'): self._d = tuple(count(self.tensors[self._c]))
+        return self._d
+
+    def getDistribution(self, countOn):
+        return tuple(count(self.tensors[countOn]))
+class Annotated(TensorDatasetWithDistribution):
     '''
     Dataloader for data with BIRADs annotation.
 
@@ -20,20 +32,10 @@ class Annotated(TensorDataset):
         d = torch.load('./data/BIRADs/annotated.pt')
         TensorDataset.__init__(self, d['X'], d['Ym'].long(), d['Ybirad'].long())
         self.cls_name = d['cls_name']
-
-    @property
-    def BIRADsDistribution(self): 
-        if not hasattr(self, '_bd'): self._bd = tuple(count(self.tensors[2]))
-        return self._bd
-
-    @property
-    def MalignantDistribution(self): 
-        if not hasattr(self, '_md'): self._md = tuple(count(self.tensors[1]))
-        return self._md
     
     @property
     def K(self): return len(self.cls_name)
-class Unannotated(TensorDataset):
+class Unannotated(TensorDatasetWithDistribution):
     '''
     Dataloader for data without BIRADs annotation.
     
@@ -42,11 +44,6 @@ class Unannotated(TensorDataset):
     def __init__(self):
         d = torch.load('./data/BIRADs/unannotated.pt')
         TensorDataset.__init__(self, d['X'], d['Ym'].long())
-
-    @property
-    def MalignantDistribution(self): 
-        if not hasattr(self, '_md'): self._md = tuple(count(self.tensors[1]))
-        return self._md
 
 def classSpecSplit(tensors, cls_sum, cls_vnum):
     '''
@@ -76,7 +73,7 @@ def classSpecSplit(tensors, cls_sum, cls_vnum):
     N = len(tcs[0])
     tcs = [torch.cat([t[i] for t in tcs], dim=0) for i in range(N)]
     vcs = [torch.cat([t[i] for t in vcs], dim=0) for i in range(N)]
-    return TensorDataset(*tcs), TensorDataset(*vcs)
+    return TensorDatasetWithDistribution(*tcs), TensorDatasetWithDistribution(*vcs)
 
 def trainValidSplit(t, v):
     '''
@@ -92,12 +89,12 @@ def trainValidSplit(t, v):
     a = round(vr * len(anno))  
     u = round(vr * len(unanno))  
 
-    va_distrib = [max(1, round(i * vr)) for i in anno.BIRADsDistribution]
+    va_distrib = [max(1, round(i * vr)) for i in anno.distribution]
     va_distrib[0] += a - sum(va_distrib)
-    ta, va = classSpecSplit(anno.tensors, anno.BIRADsDistribution, va_distrib)
+    ta, va = classSpecSplit(anno.tensors, anno.distribution, va_distrib)
     
-    vu_distrib = [max(1, round(i * vr)) for i in unanno.MalignantDistribution]
+    vu_distrib = [max(1, round(i * vr)) for i in unanno.distribution]
     vu_distrib[0] += u - sum(vu_distrib)
-    tu, vu = classSpecSplit(unanno.tensors, unanno.MalignantDistribution, vu_distrib)
+    tu, vu = classSpecSplit(unanno.tensors, unanno.distribution, vu_distrib)
 
     return (ta, tu), (va, vu)
