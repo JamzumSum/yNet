@@ -137,10 +137,10 @@ class UNet(nn.Module, NeedShape):
         return x9, r
 
 if __name__ == "__main__":
-    unet = UNet(1, 572, 572, 2)
+    unet = UNet(3, 512, 512, 1, 16)
     for name, model in unet.named_modules():
         if isinstance(model, NeedShape):
             print(name, model.oshape)
-    x = torch.randn(2, 1, 572, 572)
+    x = torch.randn(2, 3, 512, 512)
     y = unet(x)
-    print(y.shape)
+    print(i.shape for i in y)

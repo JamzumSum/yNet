@@ -6,6 +6,7 @@ model:      # model constructor
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_size: 32
   fc: 16
+  pi: 0.99
 
 training:  # training strategy
   device: cuda:0
@@ -29,7 +30,7 @@ branch:
     scheduler: null
     optimizer:
       - Adam
-      - lr: 1.0e-5
+      - lr: 1.e-3
         weight_decay: 1.0e-3
   M: 
     optimizer:
@@ -52,7 +53,6 @@ dataloader:
     shuffle: True
   scoring:
     batch_size: 11
-    shuffle: True
     
 paths:
   model_dir: model/toynetv1/seplr

@@ -4,19 +4,23 @@ A trainer for toynets.
 * author: JamzumSum
 * create: 2021-1-13
 '''
+from itertools import chain
+
 import torch
 import torch.nn.functional as F
 from progress.bar import Bar
 from torch.utils.data import DataLoader
 
+from common.decorators import Batched, KeyboardInterruptWrapper, NoGrad
 from common.trainer import Trainer
-from common.utils import freeze, gray2JET, ConfusionMatrix
-from common.decorators import KeyboardInterruptWrapper, NoGrad, Batched
+from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
 from utils import update_default
-    
+
 class ToyNetTrainer(Trainer):
     @property
-    def logHotmap(self): return hasattr(self.net, 'hotmap') and bool(self.net.hotmap)
+    def logHotmap(self): return hasattr(self.net, 'support') and 'hotmap' in self.net.support
+    @property
+    def adversarial(self): return hasattr(self.net, 'support') and 'discriminator' in self.net.support
     @property
     def sg_conf(self): return self.conf.get('scheduler', {})
 
@@ -29,7 +33,11 @@ class ToyNetTrainer(Trainer):
         sg_arg = branch_conf.get('scheduler', self.sg_conf)
 
         op: torch.optim.Optimizer = getattr(torch.optim, op_name)
-        paramM, paramB, paramD = self.net.seperatedParameters()
+        paramM, paramB = self.net.seperatedParameters()
+        paramD = None
+        if self.adversarial: 
+            paramD = self.net.discriminatorParameters()
+            paramM = chain(paramM, paramD)
         param = {
             'default': paramM, 
             'discriminator': paramD,
@@ -43,36 +51,61 @@ class ToyNetTrainer(Trainer):
         return optimizer, scheduler
 
     @KeyboardInterruptWrapper(lambda self, *l, **d: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
-    def train(self, anno, unanno, vanno=None, vunanno=None):
-        aloader = DataLoader(anno, **self.dataloader.get('annotated', {}))
-        uloader = DataLoader(unanno, **self.dataloader.get('unannotated', {}))
+    def train(self, ta, tu, va=None, vu=None):
+        # get all loaders
+        aloader = DataLoader(ta, **self.dataloader.get('annotated', {}))
+        uloader = DataLoader(tu, **self.dataloader.get('unannotated', {}))
+        if va: 
+            valoader = DataLoader(va, batch_size=aloader.batch_size)
+        if vu:
+            vuloader = DataLoader(vu, batch_size=uloader.batch_size)
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
-        annoMdistrib = anno.getDistribution(1)
 
-        # get optimizer
+        # cache all distributions, for they are constants
+        normalize1 = lambda x: x / x.sum()
+        annoMdistrib = normalize1(torch.Tensor(ta.getDistribution(1)))
+        annoBdistrib = normalize1(torch.Tensor(ta.distribution))
+        unannoDistrib = normalize1(torch.Tensor(tu.distribution))
+        if va: 
+            vannoMdistrib = normalize1(torch.Tensor(va.getDistribution(1)))
+            vannoBdistrib = normalize1(torch.Tensor(va.distribution))
+        if vu:
+            vunannoDistrib = normalize1(torch.Tensor(vu.distribution))
+
+        # get all optimizers and schedulers
         gop, gsg = self.getBranchOptimizerAndScheduler('default')
-        dop, dsg = self.getBranchOptimizerAndScheduler('discriminator')
         mop, msg = self.getBranchOptimizerAndScheduler('M')
         bop, bsg = self.getBranchOptimizerAndScheduler('B')
+        if self.adversarial:
+            dop, dsg = self.getBranchOptimizerAndScheduler('discriminator')
+        else: dsg = None
+
         # init tensorboard logger
         self.prepareBoard()
         # lemme see who dare to use cpu for training ???
         if self.device.type == 'cpu':
             print('Warning: You are using CPU for training. Be careful of its temperature...')
 
-        def trainInBatch(X, Ym, Yb=None, name='', mweight=None, bweight=None):
+        def trainInBatch(X, Ym, Yb=None, ops=None, mweight=None, bweight=None, name=''):
             if self.cur_epoch < unanno_only_epoch: Yb = None
             X = X.to(self.device)
             Ym = Ym.to(self.device)
             if Yb is not None: Yb = Yb.to(self.device)
+            if mweight is not None: mweight = mweight.to(self.device)
+            if bweight is not None: bweight = bweight.to(self.device)
             loss, summary = self.net.loss(X, Ym, Yb, self.piter, mweight, bweight)
-            loss.backward()
-            for i in ops:
-                i.step()
-                i.zero_grad()
-            self.total_batch += 1
-            self.logSummary(name, summary, self.total_batch)
+            if ops:
+                loss.backward()
+                for i in ops:
+                    i.step()
+                    i.zero_grad()
+            if name:
+                self.total_batch += 1
+                self.logSummary(name, summary, self.total_batch)
             bar.next(Ym.shape[0])
+            return loss.detach_()
+        trainWithDataset = Batched(trainInBatch)
+
         def trainDiscriminator(X, Ym, Yb):
             X = X.to(self.device)
             Ym = Ym.to(self.device)
@@ -82,37 +115,55 @@ class ToyNetTrainer(Trainer):
             dop.step()
             dop.zero_grad()
             bar.next(Ym.shape[0])
+            return loss.detach_()
 
+        if self.cur_epoch == 0:
+            self.board.add_graph(self.net, ta.tensors[0][:2])
+            
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             if self.cur_epoch < unanno_only_epoch: 
-                ops = (gop, )
-            else:
-                ops = (mop, bop)
+                mop.state['state'] = gop.state['state'].copy()
+                bop.state['state'] = gop.state['state'].copy()
 
             self.net.train()
-            bar = Bar('epoch %03d' % self.cur_epoch, max=len(unanno) + 2 * len(anno))
-            Batched(trainInBatch)(uloader, name='unannotated', mweight=unanno.distribution)
-            Batched(trainInBatch)(aloader, name='annotated', mweight=anno.distribution, bweight=annoMdistrib)
-            Batched(trainDiscriminator)(aloader)
+            bar = Bar('epoch T%03d' % self.cur_epoch, max=len(tu) + (len(ta) << int(self.adversarial)))
+            tull, = trainWithDataset(
+                uloader, ops = (gop, ), name='unannotated', mweight=unannoDistrib
+            )
+            tall, = trainWithDataset(
+                aloader, ops = (mop, bop), name='annotated', mweight=annoMdistrib, bweight=annoBdistrib
+            )
+            if self.adversarial: dll, = Batched(trainDiscriminator)(aloader)
             bar.finish()
 
-            merr, berr = self.score('annotated/trainset', anno)         # trainset score
-            self.score('unannotated/trainset', unanno)
-            if vanno: 
-                merr, berr = self.score('annotated/validation', vanno)  # validation score
-            if vunanno: self.score('unannotated/validation', vunanno)
+            amerr, berr = self.score('annotated/trainset', ta)          # trainset score
+            umerr = self.score('unannotated/trainset', tu)
+            if va: 
+                amerr, berr = self.score('annotated/validation', va)    # validation score
+            if vu: 
+                umerr = self.score('unannotated/validation', vu)
+            merr = (amerr + umerr) / 2
 
             if merr < self.best_mark:
                 self.best_mark = merr
                 self.save('best', merr)
             self.save('latest', merr)
 
-            if dsg: dsg.step(0)
+            ll = torch.cat((tull, tall)).mean()
+            if va or vu:
+                vll = []
+                bar = Bar('epoch V%03d' % self.cur_epoch)
+                if va: vll.append(trainWithDataset(valoader, mweight=vannoMdistrib, bweight=vannoBdistrib))
+                if vu: vll.append(trainWithDataset(vuloader, mweight=vunannoDistrib))
+                bar.finish()
+                ll = (ll + torch.cat(vll).mean()) / 2
+            
+            if dsg: dsg.step(dll.mean())
             if self.cur_epoch < unanno_only_epoch: 
-                if gsg: gsg.step(merr)
+                if gsg: gsg.step(ll)
             else:
-                if msg: msg.step(merr)
-                if bsg: bsg.step(berr)
+                if msg: msg.step(ll)
+                if bsg: bsg.step(ll)
 
     @NoGrad
     def score(self, caption, dataset):
@@ -124,13 +175,13 @@ class ToyNetTrainer(Trainer):
         mcm = ConfusionMatrix(2)
 
         def scoresInBatch(X, Ym, Yb=None):
-            Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pb is not softmax-ed
-            Pm = torch.round(Pm).squeeze(1)
-            mcm.add(Pm, Ym)
-            if Yb is None: return Pm
+            Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pm & Pb is not softmax-ed
+            Pm = torch.argmax(Pm, dim=-1)               # but argmax is enough :D
+            mcm.add(Pm, Ym.to(self.device))
+            if Yb is None: return Pm, 
         
-            Pb = torch.argmax(Pb, dim=-1)   # but argmax is enough :D
-            bcm.add(Pb, Yb)
+            Pb = torch.argmax(Pb, dim=-1)   
+            bcm.add(Pb, Yb.to(self.device))
             return Pm, Pb
         
         loader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
@@ -148,18 +199,17 @@ class ToyNetTrainer(Trainer):
         self.board.add_image('ConfusionMatrix/malignant/%s' % caption, mcm.m, self.cur_epoch, dataformats='HW')
         self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
 
-        torch.randint()
-        X = next(loader)[0].to(self.device)
+        X = next(iter(loader))[0].to(self.device)
         res = self.net(X)
 
         if self.logHotmap:
             M, B, _, bweights = res
             hotmap = 0.6 * X + 0.2 * gray2JET(M[:, 0])
-            self.board.add_images('%s/CAM malignant' % caption, hotmap, self.cur_epoch, dataformats='CHW')
+            self.board.add_images('%s/CAM malignant' % caption, hotmap, self.cur_epoch)
             # Now we generate CAM even if dataset is BIRADS-unannotated.
-            B = (B.permute(0, 2, 3, 1) * torch.softmax(bweights, dim=-1)).sum(dim=-1)     # [N, H, W]
+            B = (B * unsqueeze_as(torch.softmax(bweights, dim=-1), B)).sum(dim=1)     # [N, H, W]
             hotmap = 0.6 * X + 0.2 * gray2JET(B)
-            self.board.add_images('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch, dataformats='CHW')
+            self.board.add_images('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch)
 
         if berr is None: return merr
 

@@ -1,57 +1,7 @@
-model:      # model constructor
-  ishape:
-    - 3
-    - 512
-    - 512
-  K: 6     # 2, 3, 4a, 4b, 4c, 5
-  patch_size: 32
-  fc: 16
+import: ./toynetv1_gpu.yml
 
 training:  # training strategy
   device: cpu
-  continue: True
-  load_from: latest
-  max_epoch: 100
-  use_unannotation_from: 15  # early stop
-
-optimizer:
-  - Adam
-  - lr: 5.0e-4
-
-scheduler:
-  factor: 0.2
-  patience: 2
-  verbose: True
-  cooldown: 8
-
-branch:
-  default:
-    scheduler: null
-    optimizer:
-      - Adam
-      - lr: 1.0e-5
-        weight_decay: 1.0e-3
-  M: 
-    optimizer:
-      - Adam
-      - lr: 5.0e-8
-        weight_decay: 1.0e-3
-  discriminator:
-    scheduler:
-      factor: 0.1
-      patience: 10
-      cooldown: 0
-
-dataloader:
-  annotated:
-    batch_size: 11
-    shuffle: True
-    drop_last: True
-  unannotated:
-    batch_size: 11
-    shuffle: True
-  scoring:
-    batch_size: 11
     
 paths:
   model_dir: model/toynetv1/tmp

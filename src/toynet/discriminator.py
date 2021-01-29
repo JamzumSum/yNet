@@ -10,7 +10,7 @@ class ConsistancyDiscriminator(nn.Sequential):
     def __init__(self, K, hs=64):
         nn.Sequential.__init__(
             self, 
-            nn.Linear(K + 1, hs), 
+            nn.Linear(K + 2, hs), 
             nn.Tanh(),
             nn.Linear(hs, hs), 
             nn.PReLU(),
@@ -20,7 +20,7 @@ class ConsistancyDiscriminator(nn.Sequential):
         
     def forward(self, Pm, Pb):
         '''
-        Pm: [N, 1]
+        Pm: [N, 2]
         Pb: [N, K]
         O: [N, 1]. in (0, 1)
         '''
@@ -29,7 +29,7 @@ class ConsistancyDiscriminator(nn.Sequential):
 
     def loss(self, Pm, Pb, Y):
         '''
-        Pm: [N, 1]
+        Pm: [N, 2]
         Pb: [N, K]
         Y: [N, 1]
         '''

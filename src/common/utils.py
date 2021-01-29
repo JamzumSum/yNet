@@ -4,6 +4,34 @@ from itertools import product
 def freeze(tensor, f=0.):
     return (1 - f) * tensor + f * tensor.detach()
     
+def unsqueeze_as(s, t, dim=-1):
+    while s.dim() < t.dim():
+        s = s.unsqueeze(dim)
+    return s
+
+def cond_trans(T, F, cond):
+    '''
+    Conditional transfer like: 
+        [t if c else f for t, f, c in zip(T, F, cond)]
+    - T: [N, ...]
+    - F: [N, ...], same as T
+    - cond: [N] or [N, 1]. 0/1
+    return [N, ...], same as T
+    '''
+    assert T.shape == F.shape
+    cond = unsqueeze_as(cond, T, 1) # [N, ...]
+    return T * cond + F * (1 - cond)
+
+def class_trans(T, F, cond):
+    '''
+    T: [N, K, ...]
+    F: [N, K, ...]
+    cond: [N, K]
+    return [N, ...]
+    '''
+    cond = unsqueeze_as(cond, T, 2) # [N, K, ...]
+    return (T * cond + F * (1 - cond)).sum(dim=1)
+
 def gray2JET(x, thresh=.5):
     """
     - x: [..., H, W],       NOTE: float 0~1
@@ -23,13 +51,15 @@ def gray2JET(x, thresh=.5):
     B = torch.sum(torch.stack(B) * cond, dim=0)
     G = torch.sum(torch.stack(G) * cond, dim=0)
     R = torch.sum(torch.stack(R) * cond, dim=0)
-    return (x > thresh * 255) * torch.stack([R, G, B], dim=-3) / 255
+    O = torch.stack([R, G, B], dim=-3) / 255
+    return unsqueeze_as(x > thresh * 255, O, 1) * O
 
 class ConfusionMatrix:
-    def __init__(self, K=None):
+    def __init__(self, K=None, smooth=1e-8):
         '''P&Y: [N]'''
         if K: self.m = torch.zeros(K, K, dtype=torch.int)
         self.K = K
+        self.eps = smooth
         
     @property
     def initiated(self): return hasattr(self, 'm')
@@ -41,34 +71,35 @@ class ConfusionMatrix:
         else: self.K = K = int(Y.max())
 
         if not self.initiated: 
-            self.m = torch.zeros(K, K, dtype=torch.int)
+            self.m = torch.zeros(K, K, dtype=torch.int, device=P.device)
+        if self.m.device != P.device: 
+            self.m = self.m.to(P.device)
 
         for i, j in product(range(K), range(K)):
             self.m[i, j] += ((P == i) * (Y == j)).sum()
     
-    def accuracy(self, reduction='mean'):
-        acc = self.m.diag()
-        if reduction == 'mean': return acc.mean()
-        else: return acc
+    def accuracy(self):
+        acc = self.m.diag().sum()
+        return acc / self.m.sum()
 
     def err(self, *args, **kwargs): 
         return 1 - self.accuracy(*args, **kwargs)
     
     def precision(self, reduction='none'):
         acc = self.m.diag()
-        prc = acc / self.m.sum(dim=0)
+        prc = acc / (self.m.sum(dim=1) + self.eps)
         if reduction == 'mean': return prc.mean()
         else: return prc
 
     def recall(self, reduction='none'):
         acc = self.m.diag()
-        rec = acc / self.m.sum(dim=1)
+        rec = acc / (self.m.sum() - self.m.sum(dim=0) - self.m.sum(dim=1) + self.m.diag() + self.eps)
         if reduction == 'mean': return rec.mean()
         else: return rec
 
     def fscore(self, beta=1, reduction='mean'):
         P = self.precision()
         R = self.recall()
-        f = (1 + beta * beta) * (P * R) / (beta * beta * P + R)
+        f = (1 + beta * beta) * (P * R) / (beta * beta * P + R + self.eps)
         if reduction == 'mean': return f.mean()
         else: return f

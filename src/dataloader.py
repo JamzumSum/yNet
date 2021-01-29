@@ -11,7 +11,7 @@ def count(longT):
     return [int((longT == i).sum()) for i in range(int(longT.max()) + 1)]
 
 class TensorDatasetWithDistribution(TensorDataset):
-    def __init__(self, countOn=-1, *tensors):
+    def __init__(self, *tensors, countOn=-1):
         TensorDataset.__init__(self, *tensors)
         self._c = countOn
 
@@ -30,7 +30,7 @@ class Annotated(TensorDatasetWithDistribution):
     '''
     def __init__(self):
         d = torch.load('./data/BIRADs/annotated.pt')
-        TensorDataset.__init__(self, d['X'], d['Ym'].long(), d['Ybirad'].long())
+        TensorDatasetWithDistribution.__init__(self, d['X'], d['Ym'].long(), d['Ybirad'].long())
         self.cls_name = d['cls_name']
     
     @property
@@ -43,7 +43,7 @@ class Unannotated(TensorDatasetWithDistribution):
     '''
     def __init__(self):
         d = torch.load('./data/BIRADs/unannotated.pt')
-        TensorDataset.__init__(self, d['X'], d['Ym'].long())
+        TensorDatasetWithDistribution.__init__(self, d['X'], d['Ym'].long())
 
 def classSpecSplit(tensors, cls_sum, cls_vnum):
     '''
