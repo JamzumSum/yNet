@@ -1,3 +1,7 @@
+import yaml
+import os
+
+from .dict import deep_update
 
 def cal_parameters(model):
     blank = ' '
@@ -30,19 +34,11 @@ def cal_parameters(model):
         model._get_name(), num_para * type_size / 1000 / 1000))
     print('-'*90)
 
-def update_default(default, update, copy=False):
-    if copy: default = default.copy()
-    default.update(update)
-    return default
-
-def soft_update(default, update):
-    f = {dict: dict.items, list: enumerate}[type(update)]
-    for k, v in f(update):
-        if k in default:
-            if isinstance(v, dict) and isinstance(default[k], dict): 
-                default[k] = soft_update(default[k], v)
-            elif isinstance(v, list) and isinstance(default[k], list): 
-                default[k] = soft_update(default[k], v)
-            else: default[k] = v
-        else: default[k] = v
-    return default
+def getConfig(path):
+    with open(path) as f: 
+        d = yaml.safe_load(f)
+        if 'import' in d: 
+            path = os.path.join(os.path.dirname(path), d.pop('import'))
+            imd = getConfig(path)
+            return deep_update(imd.copy(), d)
+        else: return d

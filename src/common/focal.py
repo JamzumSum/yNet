@@ -30,7 +30,7 @@ def focalBCE(P, Y, gamma=2., K=-1, weight=None):
     # This is a 'pre-distribution' that needs softmax.
     # NOTE: softmax is troubling for both branches. 
     Y = F.one_hot(Y, num_classes=K).float()
-    bce = F.binary_cross_entropy_with_logits(P, Y, pos_weight=weight, reduction='none')
+    bce = F.binary_cross_entropy(P, Y, weight=weight, reduction='none')
     pt = torch.exp(-bce)            # [N, K]
     gms = (1 - pt) ** gamma         # [N, K]
     return (gms * bce).mean()

@@ -6,9 +6,10 @@ model:      # model constructor
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_size: 32
   fc: 16
-  pi: 0.99
+  pi: 0.5
 
-training:  # training strategy
+# training strategy
+training:  
   device: cuda:0
   continue: False
   load_from: latest
@@ -57,3 +58,4 @@ dataloader:
 paths:
   model_dir: model/toynetv1/seplr
   log_dir: log/toynetv1/{date}-seplr
+  post_training: src/post_training.py

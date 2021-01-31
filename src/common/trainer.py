@@ -10,7 +10,6 @@ import os
 import torch
 from tensorboardX import SummaryWriter
 
-
 class Trainer:
     cur_epoch = 0
     total_batch = 0

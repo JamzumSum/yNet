@@ -56,7 +56,6 @@ def gray2JET(x, thresh=.5):
 
 class ConfusionMatrix:
     def __init__(self, K=None, smooth=1e-8):
-        '''P&Y: [N]'''
         if K: self.m = torch.zeros(K, K, dtype=torch.int)
         self.K = K
         self.eps = smooth
@@ -67,6 +66,7 @@ class ConfusionMatrix:
     def N(self): return self.m.sum() if self.initiated else None
 
     def add(self, P, Y):
+        '''P&Y: [N]'''
         if self.K: K = self.K
         else: self.K = K = int(Y.max())
 
@@ -74,6 +74,8 @@ class ConfusionMatrix:
             self.m = torch.zeros(K, K, dtype=torch.int, device=P.device)
         if self.m.device != P.device: 
             self.m = self.m.to(P.device)
+        if Y.device != P.device:
+            Y = Y.to(P.device)
 
         for i, j in product(range(K), range(K)):
             self.m[i, j] += ((P == i) * (Y == j)).sum()

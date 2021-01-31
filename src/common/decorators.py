@@ -8,25 +8,25 @@ class KeyboardInterruptWrapper:
 
     def __call__(self, func):
         @wraps(func)
-        def wrapped(*args, **kwargs):
+        def KBISafeWrapper(*args, **kwargs):
             try: return func(*args, **kwargs)
             except KeyboardInterrupt:
                 self._s(*args, **kwargs)
-        return wrapped
+        return KBISafeWrapper
 
 def NoGrad(func):
     @wraps(func)
-    def wrapped(*args, **kwargs):
+    def nogradwrapper(*args, **kwargs):
         with torch.no_grad():
             return func(*args, **kwargs)
-    return wrapped
+    return nogradwrapper
 
 def Batched(func):
     @wraps(func)
-    def wrapped(loader, *args, **kwargs):
+    def thatinloader(loader, *args, **kwargs):
         res = [func(*d, *args, **kwargs) for d in loader]
         if not res or res[0] is None: return
         N = len(res[0])
         res = [[d[i] for d in res] for i in range(N)]
         return tuple((torch.cat if d[0].dim() > 0 else torch.stack)(d) for d in res)
-    return wrapped
+    return thatinloader

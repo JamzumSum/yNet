@@ -20,7 +20,8 @@ assert hasattr(torch, 'amax')   # make sure amax is supported
 def diverseMSE(CAM, Y, K=-1, a=1., reduction='mean'):
     fence_sitter = lambda x: 0.25 - ((x - .5) ** 2).mean(dim=(2, 3))
     towards_zero = lambda x: (x ** 2).mean(dim=(2, 3))
-    mse = class_trans(a * fence_sitter(CAM), towards_zero(CAM), F.one_hot(Y, num_classes=K))
+    # mse = class_trans(a * fence_sitter(CAM), towards_zero(CAM), F.one_hot(Y, num_classes=K))
+    mse = a * fence_sitter(CAM)
     if reduction == 'mean': return mse.mean()
     elif reduction == 'sum': return mse.sum()
     else: return mse
@@ -29,7 +30,7 @@ class BIRADsUNet(UNet):
     '''
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     '''
-    def __init__(self, ic, ih, iw, K, fc=64, pi=0.01):
+    def __init__(self, ic, ih, iw, K, fc=64, pi=.5):
         UNet.__init__(self, ic, ih, iw, 2, fc)
         # Set out_class=2 since we have two classes: malignant and bengin
         # Note that thought B/M are exclusive, but P(M) + P(B) != 1, 
@@ -50,9 +51,11 @@ class BIRADsUNet(UNet):
         Bhead = torch.sigmoid(self.BDW(torch.tanh(x9)))
         return Mhead, Bhead
 
-    def initLastConvBias(self, pi=0.01):
+    def initLastConvBias(self, pi):
         '''
         Initial strategy from RetinaNet. Hopes to stablize the training.
+        NOTE: fore ground(tumors) are not as rare as that in RetinaNet's settings.
+            So set pi as 0.01 might be maladaptive...
         '''
         b = mathlog(pi / (1 - pi))
         torch.nn.init.constant_(self.DW.bias, b)
@@ -105,13 +108,13 @@ class ToyNetV1(nn.Module):
         # But may constrain on their own values, if necessary
 
         Mloss = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=mweight)
-        Mpenalty = diverseMSE(M, Ym, K=2)
+        Mpenalty = diverseMSE(M, Ym, K=2, a=4 * piter)
         zipM = (Mloss, Mpenalty)
 
         if Yb is None: zipB = None
         else:
             Bloss = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=bweight)
-            Bpenalty = diverseMSE(B, Yb, self.K, a=piter)
+            Bpenalty = diverseMSE(B, Yb, self.K, a=4 * piter)
             zipB = (Bloss, Bpenalty)
 
         return res, zipM, zipB
@@ -132,7 +135,7 @@ class ToyNetV1(nn.Module):
             penalty = penalty + 0.5 * Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return res, loss + 4 * penalty, summary
+        return res, loss + penalty, summary
 
     def loss(self, *args, **argv):
         '''
@@ -159,14 +162,13 @@ class ToyNetV1D(ToyNetV1):
         N = Ym.shape[0]
         with torch.no_grad():
             _, _, Pm, Pb = self.forward(X)
-        loss = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
-        loss = freeze(loss, piter ** 2)
-        loss = loss + self.D.loss(
-            Ym.unsqueeze(1), 
+        loss1 = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
+        loss2 = loss1 + self.D.loss(
+            F.one_hot(Ym, num_classes=2).type_as(Pm), 
             F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
             torch.ones(N, 1).to(X.device)
         )
-        return loss
+        return loss2 / 2
 
     def _loss(self, *args, **argv):
         res, zipM, zipB = ToyNetV1._loss(self, *args, **argv)

@@ -8,8 +8,6 @@ class ResForB(torch.nn.Module):
     Malignant loss will be 0.
     Support: resnet18, resnet34, resnet50, resnet101, resnet152
     """
-    hotmap = False
-
     def __init__(self, K, model='resnet50'):
         torch.nn.Module.__init__(self)
         self.bbranch = getattr(resnet, model)(num_classes=K)
@@ -18,9 +16,11 @@ class ResForB(torch.nn.Module):
         return self.bbranch(X)
 
     def seperatedParameters(self):
-        return (i for i in ()), self.bbranch.parameters()
+        print("You've request m-branch parameters for ResNet w/o m-branch.")
+        print("b-branch parameters are returned instead. Make sure your lr for m-branch is 0.")
+        return self.bbranch.parameters(), self.bbranch.parameters()
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None, *args, **argv):
         Pb = self.forward(X)
         Mloss = torch.zeros(1).sum()
         summary = {
@@ -28,7 +28,7 @@ class ResForB(torch.nn.Module):
         }
         if Yb is None: Bloss = 0
         else:
-            Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
+            Bloss = F.cross_entropy(Pb, Yb, weight=bweight)
             summary['loss/BIRADs CE'] = Bloss.detach()
         return Mloss + self.a * Bloss, summary
 
@@ -49,15 +49,15 @@ class Resx2(ResForB):
     def seperatedParameters(self):
         return self.mbranch.parameters(), self.bbranch.parameters()
 
-    def loss(self, X, Ym, Yb=None, piter=0.):
+    def loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None, *args, **argv):
         Pm, Pb = self.forward(X)
-        Mloss = F.cross_entropy(Pm, Ym)    # use [N, 2] to cal. CE
+        Mloss = F.cross_entropy(Pm, Ym, weight=mweight)    # use [N, 2] to cal. CE
         summary = {
             'loss/malignant CE': Mloss.detach()
         }
         if Yb is None: Bloss = 0
         else:
-            Bloss = F.cross_entropy(Pb, Yb, weight=self.bbalance)
+            Bloss = F.cross_entropy(Pb, Yb, weight=bweight)
             summary['loss/BIRADs CE'] = Bloss.detach()
         return Mloss + self.a * Bloss, summary
 

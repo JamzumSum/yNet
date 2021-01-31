@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from common.decorators import Batched, KeyboardInterruptWrapper, NoGrad
 from common.trainer import Trainer
 from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
-from utils import update_default
+from utils.dict import shallow_update
 
 class ToyNetTrainer(Trainer):
     @property
@@ -44,10 +44,10 @@ class ToyNetTrainer(Trainer):
             'M': paramM, 
             'B': paramB
         }
-        optimizer = op(param[branch], **update_default(self.op_conf[1], op_arg, True))
+        optimizer = op(param[branch], **shallow_update(self.op_conf[1], op_arg, True))
 
         if not sg_arg: return optimizer, None
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **update_default(self.sg_conf, sg_arg, True))
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **shallow_update(self.sg_conf, sg_arg, True))
         return optimizer, scheduler
 
     @KeyboardInterruptWrapper(lambda self, *l, **d: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
@@ -103,7 +103,7 @@ class ToyNetTrainer(Trainer):
                 self.total_batch += 1
                 self.logSummary(name, summary, self.total_batch)
             bar.next(Ym.shape[0])
-            return loss.detach_()
+            return loss.detach_(),
         trainWithDataset = Batched(trainInBatch)
 
         def trainDiscriminator(X, Ym, Yb):
@@ -115,33 +115,34 @@ class ToyNetTrainer(Trainer):
             dop.step()
             dop.zero_grad()
             bar.next(Ym.shape[0])
-            return loss.detach_()
+            return loss.detach_(),
 
         if self.cur_epoch == 0:
-            self.board.add_graph(self.net, ta.tensors[0][:2])
+            self.board.add_graph(self.net, ta.tensors[0][:2].to(self.device))
             
+        ops = (gop, )
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
-            if self.cur_epoch < unanno_only_epoch: 
-                mop.state['state'] = gop.state['state'].copy()
-                bop.state['state'] = gop.state['state'].copy()
-
+            if self.cur_epoch == unanno_only_epoch:
+                ops = (mop, bop)
+                print('Use annotated datasets from current epoch.')
+                print('Optimizer is seperated from now.')
             self.net.train()
             bar = Bar('epoch T%03d' % self.cur_epoch, max=len(tu) + (len(ta) << int(self.adversarial)))
             tull, = trainWithDataset(
-                uloader, ops = (gop, ), name='unannotated', mweight=unannoDistrib
+                uloader, ops = ops, name='unannotated', mweight=unannoDistrib
             )
             tall, = trainWithDataset(
-                aloader, ops = (mop, bop), name='annotated', mweight=annoMdistrib, bweight=annoBdistrib
+                aloader, ops = ops, name='annotated', mweight=annoMdistrib, bweight=annoBdistrib
             )
             if self.adversarial: dll, = Batched(trainDiscriminator)(aloader)
             bar.finish()
 
             amerr, berr = self.score('annotated/trainset', ta)          # trainset score
-            umerr = self.score('unannotated/trainset', tu)
+            umerr, _ = self.score('unannotated/trainset', tu)
             if va: 
                 amerr, berr = self.score('annotated/validation', va)    # validation score
             if vu: 
-                umerr = self.score('unannotated/validation', vu)
+                umerr, _ = self.score('unannotated/validation', vu)
             merr = (amerr + umerr) / 2
 
             if merr < self.best_mark:
@@ -152,9 +153,10 @@ class ToyNetTrainer(Trainer):
             ll = torch.cat((tull, tall)).mean()
             if va or vu:
                 vll = []
-                bar = Bar('epoch V%03d' % self.cur_epoch)
-                if va: vll.append(trainWithDataset(valoader, mweight=vannoMdistrib, bweight=vannoBdistrib))
-                if vu: vll.append(trainWithDataset(vuloader, mweight=vunannoDistrib))
+                lenn = lambda x: len(x) if x else 0
+                bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(va) + lenn(vu))
+                if va: vll.append(*trainWithDataset(valoader, mweight=vannoMdistrib, bweight=vannoBdistrib))
+                if vu: vll.append(*trainWithDataset(vuloader, mweight=vunannoDistrib))
                 bar.finish()
                 ll = (ll + torch.cat(vll).mean()) / 2
             
@@ -171,57 +173,59 @@ class ToyNetTrainer(Trainer):
         Score and evaluate the given dataset.
         '''
         self.net.eval()
-        bcm = ConfusionMatrix(self.net.K)
+        annotated = len(dataset.tensors) == 3
         mcm = ConfusionMatrix(2)
+        dcm = ConfusionMatrix(2) if self.adversarial else None
+        bcm = ConfusionMatrix(self.net.K) if annotated else None
 
         def scoresInBatch(X, Ym, Yb=None):
-            Pm, Pb = self.net(X.to(self.device))[-2:]   # NOTE: Pm & Pb is not softmax-ed
-            Pm = torch.argmax(Pm, dim=-1)               # but argmax is enough :D
-            mcm.add(Pm, Ym.to(self.device))
-            if Yb is None: return Pm, 
-        
-            Pb = torch.argmax(Pb, dim=-1)   
-            bcm.add(Pb, Yb.to(self.device))
+            nonlocal mcm, dcm, bcm
+            X = X.to(self.device)
+            Ym = Ym.to(self.device)
+            Pm, Pb = self.net(X)[-2:]   # NOTE: Pm & Pb is not softmax-ed
+            if self.adversarial:
+                cy0 = self.net.D(Pm, Pb).argmax(dim=1)  # [N, 1]
+                dcm.add(cy0, torch.zeros_like(cy0))
+
+            Pm = Pm.argmax(dim=1)
+            Pb = Pb.argmax(dim=1)
+            mcm.add(Pm, Ym)
+            if Yb is None: return Pm, Pb
+
+            Yb = Yb.to(self.device)
+            bcm.add(Pb, Yb)
+            if self.adversarial:
+                cy1 = self.net.D(
+                    F.one_hot(Ym, num_classes=2).float(), 
+                    F.one_hot(Yb, num_classes=self.net.K).float()
+                )
+                dcm.add(cy1, torch.ones_like(cy1))
             return Pm, Pb
         
         loader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
-        res = Batched(scoresInBatch)(loader)
-        if len(res) == 1:
-            (Pm, ) = res
-            Pb = berr = None
-        elif len(res) == 2:
-            Pm, Pb = res
-            berr = bcm.err()
-        merr = mcm.err()
-        
-        self.board.add_scalar('err/malignant/%s' % caption, merr, self.cur_epoch)
-        self.board.add_scalar('f1/malignant/%s' % caption, mcm.fscore(), self.cur_epoch)
-        self.board.add_image('ConfusionMatrix/malignant/%s' % caption, mcm.m, self.cur_epoch, dataformats='HW')
-        self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
+        Pm, Pb = Batched(scoresInBatch)(loader)
 
-        X = next(iter(loader))[0].to(self.device)
-        res = self.net(X)
+        cmdic = {'malignant': mcm}; errl = []
+        if annotated: cmdic['BIRADs'] = bcm
+        if self.adversarial: cmdic['discriminator'] = dcm
+
+        for k, v in cmdic.items():
+            errl.append(v.err())
+            self.board.add_image('ConfusionMat/%s/%s' % (k, caption), v.m, self.cur_epoch, dataformats='HW')
+            self.board.add_scalar('err/%s/%s' % (k, caption), errl[-1], self.cur_epoch)
+            self.board.add_scalar('f1/%s/%s' % (k, caption), v.fscore(), self.cur_epoch)
+        
+        self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
+        self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
 
         if self.logHotmap:
-            M, B, _, bweights = res
-            hotmap = 0.6 * X + 0.2 * gray2JET(M[:, 0])
-            self.board.add_images('%s/CAM malignant' % caption, hotmap, self.cur_epoch)
+            # BUG: since datasets are sorted, images extracted are biased. (Bengin & BIRADs-2)
+            X = next(iter(loader))[0].to(self.device)
+            M, B, mw, bw = self.net(X)
+            wsum = lambda x, w: (x * unsqueeze_as(w.softmax(dim=-1), x)).sum(dim=1)
+            heatmap = lambda x, w: 0.7 * X + 0.1 * gray2JET(wsum(x, w))
             # Now we generate CAM even if dataset is BIRADS-unannotated.
-            B = (B * unsqueeze_as(torch.softmax(bweights, dim=-1), B)).sum(dim=1)     # [N, H, W]
-            hotmap = 0.6 * X + 0.2 * gray2JET(B)
-            self.board.add_images('%s/CAM BIRADs' % caption, hotmap, self.cur_epoch)
+            self.board.add_images('%s/CAM malignant' % caption, heatmap(M, mw), self.cur_epoch)
+            self.board.add_images('%s/CAM BIRADs' % caption, heatmap(B, bw), self.cur_epoch)
 
-        if berr is None: return merr
-
-        # absurd: sum of predicts that are of BIRAD-2 but malignant; of BIRAD-5 but benign
-        # NOTE: the criterion is class-specific. change it once class-map are changed.
-        # Expected to be substituted by the consistency indicated by the discriminator.
-        absurd = ((Pb == 0) * (Pm == 1)).sum() + ((Pb == 5) * (Pm == 0)).sum()
-
-        self.board.add_scalar('absurd/%s' % caption, absurd / Pm.shape[0], self.cur_epoch)
-        self.board.add_scalar('err/BIRADs/%s' % caption, berr, self.cur_epoch)
-        self.board.add_scalar('f1/BIRADs/%s' % caption, bcm.fscore(), self.cur_epoch)
-        self.board.add_image('ConfusionMatrix/BIRADs/%s' % caption, bcm.m, self.cur_epoch, dataformats='HW')
-        self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
-        return merr, berr
-            
+        return errl[:2]
