@@ -4,12 +4,12 @@ A toy implement for classifying benign/malignant and BIRADs
 * author: JamzumSum
 * create: 2021-1-11
 '''
+from itertools import chain
 from math import log as mathlog
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.utils import class_trans, cond_trans, freeze
 from common.focal import focalBCE
 
 from .discriminator import ConsistancyDiscriminator as CD
@@ -17,14 +17,53 @@ from .unet import UNet
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
 
-def diverseMSE(CAM, Y, K=-1, a=1., reduction='mean'):
-    fence_sitter = lambda x: 0.25 - ((x - .5) ** 2).mean(dim=(2, 3))
-    towards_zero = lambda x: (x ** 2).mean(dim=(2, 3))
-    # mse = class_trans(a * fence_sitter(CAM), towards_zero(CAM), F.one_hot(Y, num_classes=K))
-    mse = a * fence_sitter(CAM)
-    if reduction == 'mean': return mse.mean()
-    elif reduction == 'sum': return mse.sum()
-    else: return mse
+class SEBlock(nn.Sequential):
+    def __init__(self, L, hs=128):
+        nn.Sequential.__init__(
+            self, 
+            nn.Linear(L, hs), 
+            nn.ReLU(), 
+            nn.Linear(hs, L), 
+            nn.Softmax(dim=-1)        
+            # use softmax instead of sigmoid here since the attention-ed channels are sumed, 
+            # while the sum might be greater than 1 if sum of the attention vector is not restricted.
+        )
+        nn.init.constant_(self[2].bias, 1 / L)
+
+    def forward(self, X):
+        '''
+        X: [N, K, H, W, L]
+        O: [N, K, H, W]
+        '''
+        X = X.permute(4, 0, 1, 2, 3)            # [L, N, K, H, W]
+        Xp = F.adaptive_avg_pool2d(X, (1, 1))   # [L, N, K, 1, 1]
+        Xp = Xp.permute(1, 2, 3, 4, 0)          # [N, K, 1, 1, L]
+        Xp = self.forward(Xp).permute(4, 0, 1, 2, 3)    # [L, N, K, 1, 1]
+        return (X * Xp).sum(dim=0)
+
+class PyramidPooling(nn.Module):
+    '''
+    Use pyramid pooling instead of max-pooling to make sure more elements in CAM can be backward. 
+    Otherwise only the patch with maximum average confidence has grad while patches and small.
+    Moreover, the size of patches are fixed so is hard to select. Multi-scaled patches are suitable.
+    '''
+    def __init__(self, patch_sizes, hs=128):
+        self.patch_sizes = sorted(patch_sizes)
+        self.atn = SEBlock(self.L, hs)
+    @property
+    def L(self): return len(self.patch_sizes)
+
+    def forward(self, X):
+        '''
+        X: [N, C, H, W]
+        O: [N, K, H//P_0, W//P_0]
+        '''
+        ls = [F.avg_pool2d(patch_size) for patch_size in self.patch_sizes]
+        base = ls.pop(0)    # [N, K, H//P0, W//P0]
+        ls = [F.interpolate(i, base.shape[-2:], mode='nearest') for i in ls]
+        ls.insert(0, base)
+        ls = torch.stack(ls, dim=-1)    # [N, K, H//P0, W//P0, L]
+        return self.atn(ls)
 
 class BIRADsUNet(UNet):
     '''
@@ -58,8 +97,8 @@ class BIRADsUNet(UNet):
             So set pi as 0.01 might be maladaptive...
         '''
         b = mathlog(pi / (1 - pi))
-        torch.nn.init.constant_(self.DW.bias, b)
-        torch.nn.init.constant_(self.BDW.bias, b)
+        nn.init.constant_(self.DW.bias, b)
+        nn.init.constant_(self.BDW.bias, b)
 
     def seperatedParameters(self):
         paramAll = self.parameters()
@@ -70,15 +109,15 @@ class BIRADsUNet(UNet):
 class ToyNetV1(nn.Module):
     support = ('hotmap')
 
-    def __init__(self, ishape, K, patch_size, fc=64, pi=0.01):
+    def __init__(self, ishape, K, patch_sizes, fc=64, pi=0.01):
         nn.Module.__init__(self)
         self.K = K
         self.backbone = BIRADsUNet(*ishape, K, fc, pi)
-        self.pooling = nn.AvgPool2d(patch_size)
+        self.pooling = PyramidPooling(patch_sizes)
 
     def seperatedParameters(self):
         m, b = self.backbone.seperatedParameters()
-        return m, b
+        return chain(m, self.pooling.parameters()), b
 
     def forward(self, X):
         '''
@@ -108,13 +147,13 @@ class ToyNetV1(nn.Module):
         # But may constrain on their own values, if necessary
 
         Mloss = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=mweight)
-        Mpenalty = diverseMSE(M, Ym, K=2, a=4 * piter)
+        Mpenalty = (M ** 2).mean()
         zipM = (Mloss, Mpenalty)
 
         if Yb is None: zipB = None
         else:
             Bloss = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=bweight)
-            Bpenalty = diverseMSE(B, Yb, self.K, a=4 * piter)
+            Bpenalty = (B ** 2).mean()
             zipB = (Bloss, Bpenalty)
 
         return res, zipM, zipB
@@ -135,7 +174,7 @@ class ToyNetV1(nn.Module):
             penalty = penalty + 0.5 * Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return res, loss + penalty, summary
+        return res, loss + penalty / 4, summary
 
     def loss(self, *args, **argv):
         '''
