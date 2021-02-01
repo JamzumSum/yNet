@@ -4,7 +4,10 @@ model:      # model constructor
     - 512
     - 512
   K: 6     # 2, 3, 4a, 4b, 4c, 5
-  patch_size: 32
+  patch_sizes: 
+    - 32
+    - 64
+    - 128
   fc: 16
   pi: 0.5
 
@@ -53,7 +56,7 @@ dataloader:
     batch_size: 11
     shuffle: True
   scoring:
-    batch_size: 11
+    batch_size: 8
     
 paths:
   model_dir: model/toynetv1/seplr

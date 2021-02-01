@@ -67,6 +67,8 @@ class ConfusionMatrix:
 
     def add(self, P, Y):
         '''P&Y: [N]'''
+        assert P.dtype == torch.int
+        assert Y.dtype == torch.int
         if self.K: K = self.K
         else: self.K = K = int(Y.max())
 

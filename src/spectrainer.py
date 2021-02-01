@@ -182,9 +182,9 @@ class ToyNetTrainer(Trainer):
             nonlocal mcm, dcm, bcm
             X = X.to(self.device)
             Ym = Ym.to(self.device)
-            Pm, Pb = self.net(X)[-2:]   # NOTE: Pm & Pb is not softmax-ed
+            Pm, Pb = self.net(X)[-2:]
             if self.adversarial:
-                cy0 = self.net.D(Pm, Pb).argmax(dim=1)  # [N, 1]
+                cy0 = self.net.D(Pm, Pb).round().int()
                 dcm.add(cy0, torch.zeros_like(cy0))
 
             Pm = Pm.argmax(dim=1)
@@ -198,7 +198,7 @@ class ToyNetTrainer(Trainer):
                 cy1 = self.net.D(
                     F.one_hot(Ym, num_classes=2).float(), 
                     F.one_hot(Yb, num_classes=self.net.K).float()
-                )
+                ).round().int()
                 dcm.add(cy1, torch.ones_like(cy1))
             return Pm, Pb
         
@@ -222,8 +222,8 @@ class ToyNetTrainer(Trainer):
             # BUG: since datasets are sorted, images extracted are biased. (Bengin & BIRADs-2)
             X = next(iter(loader))[0].to(self.device)
             M, B, mw, bw = self.net(X)
-            wsum = lambda x, w: (x * unsqueeze_as(w.softmax(dim=-1), x)).sum(dim=1)
-            heatmap = lambda x, w: 0.7 * X + 0.1 * gray2JET(wsum(x, w))
+            wsum = lambda x, w: (x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)).sum(dim=1)
+            heatmap = lambda x, w: 0.7 * X + 0.1 * gray2JET(wsum(x, w), thresh=0.)
             # Now we generate CAM even if dataset is BIRADS-unannotated.
             self.board.add_images('%s/CAM malignant' % caption, heatmap(M, mw), self.cur_epoch)
             self.board.add_images('%s/CAM BIRADs' % caption, heatmap(B, bw), self.cur_epoch)

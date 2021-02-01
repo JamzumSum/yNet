@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from common.focal import focalBCE
+from common.utils import freeze
 
 from .discriminator import ConsistancyDiscriminator as CD
 from .unet import UNet
@@ -38,7 +39,7 @@ class SEBlock(nn.Sequential):
         X = X.permute(4, 0, 1, 2, 3)            # [L, N, K, H, W]
         Xp = F.adaptive_avg_pool2d(X, (1, 1))   # [L, N, K, 1, 1]
         Xp = Xp.permute(1, 2, 3, 4, 0)          # [N, K, 1, 1, L]
-        Xp = self.forward(Xp).permute(4, 0, 1, 2, 3)    # [L, N, K, 1, 1]
+        Xp = nn.Sequential.forward(self, Xp).permute(4, 0, 1, 2, 3)    # [L, N, K, 1, 1]
         return (X * Xp).sum(dim=0)
 
 class PyramidPooling(nn.Module):
@@ -48,6 +49,7 @@ class PyramidPooling(nn.Module):
     Moreover, the size of patches are fixed so is hard to select. Multi-scaled patches are suitable.
     '''
     def __init__(self, patch_sizes, hs=128):
+        nn.Module.__init__(self)
         self.patch_sizes = sorted(patch_sizes)
         self.atn = SEBlock(self.L, hs)
     @property
@@ -58,7 +60,7 @@ class PyramidPooling(nn.Module):
         X: [N, C, H, W]
         O: [N, K, H//P_0, W//P_0]
         '''
-        ls = [F.avg_pool2d(patch_size) for patch_size in self.patch_sizes]
+        ls = [F.avg_pool2d(X, patch_size) for patch_size in self.patch_sizes]
         base = ls.pop(0)    # [N, K, H//P0, W//P0]
         ls = [F.interpolate(i, base.shape[-2:], mode='nearest') for i in ls]
         ls.insert(0, base)
@@ -202,12 +204,13 @@ class ToyNetV1D(ToyNetV1):
         with torch.no_grad():
             _, _, Pm, Pb = self.forward(X)
         loss1 = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
-        loss2 = loss1 + self.D.loss(
+        loss2 = self.D.loss(
             F.one_hot(Ym, num_classes=2).type_as(Pm), 
             F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
             torch.ones(N, 1).to(X.device)
         )
-        return loss2 / 2
+        loss2 = freeze(loss2, (1 - loss2.detach()) ** 2)    # like focal
+        return (loss1 + loss2) / 2
 
     def _loss(self, *args, **argv):
         res, zipM, zipB = ToyNetV1._loss(self, *args, **argv)
