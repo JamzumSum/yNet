@@ -9,19 +9,16 @@ A torch implement for U-Net.
 import torch
 import torch.nn as nn
 
-class NeedShape:
-    def __init__(self, *args):
-        self.isp = args
-    @property
-    def ishape(self): return self.isp
-    @property
-    def oshape(self): return self.isp
+class ChannelInference:
+    def __init__(self, ic, oc):
+        self.ic = ic
+        self.oc = oc
 
-class ConvStack2(nn.Sequential, NeedShape):
+class ConvStack2(nn.Sequential, ChannelInference):
     '''
     [N, ic, H, W] -> [N, oc, H, W]
     '''
-    def __init__(self, ic, ih, iw, oc):
+    def __init__(self, ic, oc):
         nn.Sequential.__init__(
             self, 
             nn.Conv2d(ic, oc, 3, 1, 1), 
@@ -30,87 +27,74 @@ class ConvStack2(nn.Sequential, NeedShape):
             nn.BatchNorm2d(oc),
             nn.ReLU()
         )
-        NeedShape.__init__(self, ic, ih, iw)
-        self._osp = (oc, ih, iw)
-
-    @property
-    def oshape(self): return self._osp
-
-class DownConv(nn.Conv2d, NeedShape):
+        ChannelInference.__init__(self, ic, oc)
+class DownConv(nn.Conv2d, ChannelInference):
     '''
     [N, C, H, W] -> [N, C, H//2, W//2]
     '''
-    def __init__(self, ic, ih, iw):
+    def __init__(self, ic):
         nn.Conv2d.__init__(self, ic, ic, 1, 2)
-        self._osp = (ic, ih // 2, iw //2)
-        NeedShape.__init__(self, ic, ih, iw)
+        ChannelInference.__init__(self, ic, ic)
 
-    @property
-    def oshape(self): return self._osp
-
-class UpConv(nn.Sequential, NeedShape):
+class UpConv(nn.Sequential, ChannelInference):
     '''
     [N, C, H, W] -> [N, C//2, H*2, W*2]
     '''
-    def __init__(self, ic, ih, iw):
+    def __init__(self, ic):
         nn.Sequential.__init__(
             self, 
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False), 
-            nn.Conv2d(ic, ic//2, 3, 1, 1),      # NOTE: 2x2 cannot be aligned
+            # NOTE: Since 2x2 conv cannot be aligned when the shape is odd, 
+            # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
+            nn.Conv2d(ic, ic//2, 3, 1, 1),      
             nn.BatchNorm2d(ic // 2)
         )
         self.BN = nn.BatchNorm2d(ic // 2)
-        NeedShape.__init__(self, ic, ih, iw)
-        self._osp = (ic //2, ih * 2, iw * 2)
+        ChannelInference.__init__(self, ic, ic // 2)
 
-    @property
-    def oshape(self): return self._osp
-
-
-class UNet(nn.Module, NeedShape):
+class UNet(nn.Module):
     '''
     [N, ic, H, W] -> [N, fc, H, W], [N, oc, H, W]
     '''
-    def __init__(self, ic, ih, iw, oc, fc=64):
-        NeedShape.__init__(self, ic, ih, iw)
+    def __init__(self, ic, oc, fc=64, softmax=False):
         nn.Module.__init__(self)
+        self.softmax = softmax
 
-        self.L1 = ConvStack2(ic, ih, iw, fc)
-        cshape = self.L1.oshape
+        self.L1 = ConvStack2(ic, fc)
+        cc = self.L1.oc
 
         for i in range(4):
-            dsample = DownConv(*cshape)
-            cshape = dsample.oshape
-            conv = ConvStack2(*cshape, oc=cshape[0] * 2)
-            cshape = conv.oshape
+            dsample = DownConv(cc)
+            cc = dsample.oc
+            conv = ConvStack2(cc, oc=cc * 2)
+            cc = conv.oc
             self.add_module('D%d' % (i + 1), dsample)
             self.add_module('L%d' % (i + 2), conv)
 
         for i in range(4):
-            usample = UpConv(*cshape)
-            cshape = usample.oshape
-            conv = ConvStack2(cshape[0] * 2, *cshape[1:], cshape[0])
-            cshape = conv.oshape
+            usample = UpConv(cc)
+            cc = usample.oc
+            conv = ConvStack2(cc * 2, cc)
+            cc = conv.oc
             self.add_module('U%d' % (i + 1), usample)
             self.add_module('L%d' % (i + 6), conv)
         
-        self._osp = (oc, *cshape[-2:])
         self.DW = nn.Conv2d(fc, oc, 1)
 
-    @property
-    def oshape(self): return self._osp
-
-    def cropCat(self, X, Y):
+    def _padCat(self, X, Y):
         '''
-        Crop X and concat to Y.
+        Pad Y and concat with X.
         X: [N, C, H_max, W_max]
         Y: [N, C, H_min, W_min]
-        -> [N, C, H_min, W_min]
+        -> [N, C, H_max, W_max]
         '''
-        # t1 = (X.shape[2] - Y.shape[2]) // 2
-        # t2 = (X.shape[3] - Y.shape[3]) // 2
-        # cropX = X[:, :, t1: t1 + Y.shape[2], t2: t2 + Y.shape[3]]
-        # return torch.cat([cropX, Y], dim=1)
+        hmax, wmax = X.shape[-2:]
+        hmin, wmin = Y.shape[-2:]
+        padl = (wmax - wmin) // 2
+        padr = wmax - wmin - padl
+        padt = (hmax - hmin) // 2
+        padb = hmax - hmin - padt
+        Y = torch.nn.functional.pad(Y, (padl, padr, padt, padb), 'constant')
         return torch.cat([X, Y], dim=1)
         
     def forward(self, X):
@@ -124,23 +108,19 @@ class UNet(nn.Module, NeedShape):
         x4 = self.L4(self.D3(x3))   # [N, 8*fc, H//8, W//8]
         x5 = self.L5(self.D4(x4))   # [N, 16*fc, H//16, W//16]
 
-        x6 = self.L6(self.cropCat(x4, self.U1(x5)))     # [N, 8*fc, H//8, W//8]
-        x7 = self.L7(self.cropCat(x3, self.U2(x6)))     # [N, 4*fc, H//4, W//4]
-        x8 = self.L8(self.cropCat(x2, self.U3(x7)))     # [N, 2*fc, H//2, W//2]
-        x9 = self.L9(self.cropCat(x1, self.U4(x8)))     # [N, fc, H, W]
+        x6 = self.L6(self._padCat(x4, self.U1(x5)))     # [N, 8*fc, H//8, W//8]
+        x7 = self.L7(self._padCat(x3, self.U2(x6)))     # [N, 4*fc, H//4, W//4]
+        x8 = self.L8(self._padCat(x2, self.U3(x7)))     # [N, 2*fc, H//2, W//2]
+        x9 = self.L9(self._padCat(x1, self.U4(x8)))     # [N, fc, H, W]
+        logit = self.DW(x9)         # [N, oc, H, W]
 
-        # oh, ow = self.oshape[-2:]   # NOTE: For origin U-Net use 2x2 conv as a 'up-conv', and it cannot 
-        #                             # be aligned when H or W is odd. So for the sake of keeping HW unchanged, 
-        #                             # it has to slice deepwise output according to the shape inferenced before. 
-        # r = torch.sigmoid(self.DW(x9)[:, :, :oh, :ow])  # [N, oc, H, W]
-        r = torch.sigmoid(self.DW(x9))
-        return x9, r
+        if self.softmax: 
+            return x9, torch.softmax(logit, 1)
+        else: 
+            return x9, torch.sigmoid(logit)
 
 if __name__ == "__main__":
-    unet = UNet(3, 512, 512, 1, 16)
-    for name, model in unet.named_modules():
-        if isinstance(model, NeedShape):
-            print(name, model.oshape)
+    unet = UNet(3, 1, 16)
     x = torch.randn(2, 3, 512, 512)
     y = unet(x)
     print(i.shape for i in y)

@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from common.focal import focalBCE
 from common.utils import freeze
 
-from .discriminator import ConsistancyDiscriminator as CD
+from .discriminator import WithCD
 from .unet import UNet
 
 assert hasattr(torch, 'amax')   # make sure amax is supported
@@ -50,6 +50,9 @@ class PyramidPooling(nn.Module):
     '''
     def __init__(self, patch_sizes, hs=128):
         nn.Module.__init__(self)
+        if any(i & 1 for i in patch_sizes):
+            print('''Warning: At least one value in `patch_sizes` is odd. 
+            Channel-wise align may behave incorrectly.''')
         self.patch_sizes = sorted(patch_sizes)
         self.atn = SEBlock(self.L, hs)
     @property
@@ -58,9 +61,11 @@ class PyramidPooling(nn.Module):
     def forward(self, X):
         '''
         X: [N, C, H, W]
-        O: [N, K, H//P_0, W//P_0]
+        O: [N, K, 2 * H//P_0 -1, 2 * W//P_0 - 1]
         '''
-        ls = [F.avg_pool2d(X, patch_size) for patch_size in self.patch_sizes]
+        # set stride as P/2, so that patches overlaps each other
+        # hopes to counterbalance the lack-representating of edge pixels of a patch.
+        ls = [F.avg_pool2d(X, patch_size, patch_size // 2) for patch_size in self.patch_sizes]
         base = ls.pop(0)    # [N, K, H//P0, W//P0]
         ls = [F.interpolate(i, base.shape[-2:], mode='nearest') for i in ls]
         ls.insert(0, base)
@@ -71,8 +76,8 @@ class BIRADsUNet(UNet):
     '''
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     '''
-    def __init__(self, ic, ih, iw, K, fc=64, pi=.5):
-        UNet.__init__(self, ic, ih, iw, 2, fc)
+    def __init__(self, ic, K, fc=64, pi=.5):
+        UNet.__init__(self, ic, oc=2, fc=fc)
         # Set out_class=2 since we have two classes: malignant and bengin
         # Note that thought B/M are exclusive, but P(M) + P(B) != 1, 
         # for there might be inputs that contain no tumor. 
@@ -111,10 +116,10 @@ class BIRADsUNet(UNet):
 class ToyNetV1(nn.Module):
     support = ('hotmap')
 
-    def __init__(self, ishape, K, patch_sizes, fc=64, pi=0.01):
+    def __init__(self, in_channel, K, patch_sizes, fc=64, pi=0.01):
         nn.Module.__init__(self)
         self.K = K
-        self.backbone = BIRADsUNet(*ishape, K, fc, pi)
+        self.backbone = BIRADsUNet(in_channel, K, fc, pi)
         self.pooling = PyramidPooling(patch_sizes)
 
     def seperatedParameters(self):
@@ -131,8 +136,8 @@ class ToyNetV1(nn.Module):
         - BIRADs prediction distrib.    [N, K]
         '''
         Mhead, Bhead = self.backbone(X)
-        Mpatches = self.pooling(Mhead)      # [N, 2, H//P, W//P]
-        Bpatches = self.pooling(Bhead)      # [N, K, H//P, W//P]
+        Mpatches = self.pooling(Mhead)      # [N, 2, 2*H//P-1, 2*W//P-1]
+        Bpatches = self.pooling(Bhead)      # [N, K, 2*H//P-1, 2*W//P-1]
 
         Pm = torch.amax(Mpatches, dim=(2, 3))        # [N, 2]
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
@@ -189,51 +194,10 @@ class ToyNetV1(nn.Module):
         '''
         return self.lossWithResult(*args, **argv)[1:]
 
-class ToyNetV1D(ToyNetV1):
-    support = ('hotmap', 'discriminator')
-
-    def __init__(self, ishape, K, *args, **argv):
-        ToyNetV1.__init__(self, ishape, K, *args, **argv)
-        self.D = CD(K)
-
-    def discriminatorParameters(self):
-        return self.D.parameters()
-
-    def discriminatorLoss(self, X, Ym, Yb, piter=0.):
-        N = Ym.shape[0]
-        with torch.no_grad():
-            _, _, Pm, Pb = self.forward(X)
-        loss1 = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
-        loss2 = self.D.loss(
-            F.one_hot(Ym, num_classes=2).type_as(Pm), 
-            F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
-            torch.ones(N, 1).to(X.device)
-        )
-        loss2 = freeze(loss2, (1 - loss2.detach()) ** 2)    # like focal
-        return (loss1 + loss2) / 2
-
-    def _loss(self, *args, **argv):
-        res, zipM, zipB = ToyNetV1._loss(self, *args, **argv)
-        _, _, Pm, Pb = res
-        consistency = self.D.forward(Pm, Pb).mean()
-        return res, zipM, zipB, (consistency, )
-
-    def lossWithResult(self, *args, **argv):
-        '''
-        return: Original result, M-branch losses, B-branch losses, consistency.
-        '''
-        res, loss, summary = ToyNetV1.lossWithResult(self, *args, **argv)
-        # But ToyNetV1 can constrain between the probability distributions Pm & Pb :D
-        consistency = res[3][0]
-        summary['consistency'] = consistency.detach()
-        return res, loss + (1 - consistency), summary
-
+ToyNetV1D = WithCD(ToyNetV1)
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)
-    toy = ToyNetV1(
-        (1, 572, 572), 
-        6, 12
-    )
+    toy = ToyNetV1(1, 6, [12, 24, 48])
     loss, _ = toy.loss(x, torch.zeros(2, dtype=torch.long), torch.ones(2, dtype=torch.long))
     loss.backward()

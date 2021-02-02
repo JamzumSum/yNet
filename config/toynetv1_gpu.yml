@@ -1,8 +1,5 @@
 model:      # model constructor
-  ishape:
-    - 3
-    - 512
-    - 512
+  in_channel: 1
   K: 6     # 2, 3, 4a, 4b, 4c, 5
   patch_sizes: 
     - 32
