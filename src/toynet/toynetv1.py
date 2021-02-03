@@ -9,8 +9,7 @@ from math import log as mathlog
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from common.focal import focalBCE
+from common.loss import F, focalBCE
 from common.utils import freeze
 
 from .discriminator import WithCD
@@ -114,7 +113,7 @@ class BIRADsUNet(UNet):
         return paramM, paramB
 
 class ToyNetV1(nn.Module):
-    support = ('hotmap')
+    support = ('hotmap', )
 
     def __init__(self, in_channel, K, patch_sizes, fc=64, pi=0.01):
         nn.Module.__init__(self)
@@ -163,7 +162,7 @@ class ToyNetV1(nn.Module):
             Bpenalty = (B ** 2).mean()
             zipB = (Bloss, Bpenalty)
 
-        return res, zipM, zipB
+        return res, zipM, zipB, None
 
     def lossWithResult(self, *args, **argv):
         res = self._loss(*args, **argv)
@@ -194,7 +193,8 @@ class ToyNetV1(nn.Module):
         '''
         return self.lossWithResult(*args, **argv)[1:]
 
-ToyNetV1D = WithCD(ToyNetV1)
+    @staticmethod
+    def WCDVer(): return WithCD(ToyNetV1)
 
 if __name__ == "__main__":
     x = torch.randn(2, 1, 572, 572)

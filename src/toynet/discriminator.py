@@ -42,7 +42,7 @@ class ConsistancyDiscriminator(nn.Sequential):
 def WithCD(ToyNet, *darg, **dkwarg):
     sp = ToyNet.support
     if 'discriminator' in sp: raise ValueError(str(ToyNet), 'already supports discriminator.')
-    sp = ('discriminator', *sp)
+    sp = (*sp, 'discriminator')
 
     class DiscriminatorAssembler(ToyNet):
         support = sp
@@ -53,18 +53,16 @@ def WithCD(ToyNet, *darg, **dkwarg):
         def discriminatorParameters(self):
             return self.D.parameters()
 
-        def discriminatorLoss(self, X, Ym, Yb, piter=0.):
+        def discriminatorLoss(self, Pm, Pb, Ym, Yb, piter=0.):
             N = Ym.shape[0]
-            with torch.no_grad():
-                _, _, Pm, Pb = self.forward(X)
-            loss1 = self.D.loss(Pm, Pb, torch.zeros(N, 1).to(X.device))
-            loss2 = self.D.loss(
-                F.one_hot(Ym, num_classes=2).type_as(Pm), 
-                F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
-                torch.ones(N, 1).to(X.device)
-            )
-            loss2 = freeze(loss2, (1 - loss2.detach()) ** 2)    # like focal
-            return (loss1 + loss2) / 2
+            loss1 = self.D.loss(Pm.detach(), Pb.detach(), torch.zeros(N, 1).to(Pm.device))
+            # loss2 = self.D.loss(
+            #     F.one_hot(Ym, num_classes=2).type_as(Pm), 
+            #     F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
+            #     torch.ones(N, 1).to(Pm.device)
+            # )
+            # loss2 = freeze(loss2, (1 - loss2.detach()) ** 2)    # like focal
+            return loss1
 
         def _loss(self, *args, **argv):
             res, zipM, zipB, zipC = ToyNet._loss(self, *args, **argv)

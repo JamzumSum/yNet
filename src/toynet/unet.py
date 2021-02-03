@@ -88,13 +88,13 @@ class UNet(nn.Module):
         Y: [N, C, H_min, W_min]
         -> [N, C, H_max, W_max]
         '''
-        hmax, wmax = X.shape[-2:]
-        hmin, wmin = Y.shape[-2:]
-        padl = (wmax - wmin) // 2
-        padr = wmax - wmin - padl
-        padt = (hmax - hmin) // 2
-        padb = hmax - hmin - padt
-        Y = torch.nn.functional.pad(Y, (padl, padr, padt, padb), 'constant')
+        # hmax, wmax = X.shape[-2:]
+        # hmin, wmin = Y.shape[-2:]
+        # padl = (wmax - wmin) // 2
+        # padr = wmax - wmin - padl
+        # padt = (hmax - hmin) // 2
+        # padb = hmax - hmin - padt
+        # Y = torch.nn.functional.pad(Y, (padl, padr, padt, padb), 'constant')
         return torch.cat([X, Y], dim=1)
         
     def forward(self, X):

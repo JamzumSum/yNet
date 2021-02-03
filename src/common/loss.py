@@ -1,5 +1,5 @@
 '''
-A collection for focal losses implementation. 
+A collection for custom losses. 
 
 * author: JamzumSum
 * create: 2021-1-29

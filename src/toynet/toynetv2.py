@@ -11,11 +11,10 @@ from math import exp as mathexp
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from common.utils import freeze
 
-from common.focal import focalBCE
-from .toynetv1 import ToyNetV1, ToyNetV1D
+from common.loss import F, focalBCE
+from .toynetv1 import ToyNetV1
 from .discriminator import WithCD
 
 class JointEstimator(nn.Sequential):
@@ -95,4 +94,5 @@ class ToyNetV2(ToyNetV1):
 
         return loss + warmup * info, summary
 
-ToyNetV2D = WithCD(ToyNetV2)
+    @staticmethod
+    def WCDVer(): return WithCD(ToyNetV2)

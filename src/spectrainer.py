@@ -50,7 +50,6 @@ class ToyNetTrainer(Trainer):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **shallow_update(self.sg_conf, sg_arg, True))
         return optimizer, scheduler
 
-    @KeyboardInterruptWrapper(lambda self, *l, **d: print('Training paused. Start from epoch%d next time.' % self.cur_epoch))
     def train(self, ta, tu, va=None, vu=None):
         # get all loaders
         aloader = DataLoader(ta, **self.dataloader.get('annotated', {}))
@@ -63,14 +62,14 @@ class ToyNetTrainer(Trainer):
 
         # cache all distributions, for they are constants
         normalize1 = lambda x: x / x.sum()
-        annoMdistrib = normalize1(torch.Tensor(ta.getDistribution(1)))
-        annoBdistrib = normalize1(torch.Tensor(ta.distribution))
-        unannoDistrib = normalize1(torch.Tensor(tu.distribution))
+        taMdistrib = normalize1(torch.Tensor(ta.getDistribution(1)))
+        taBdistrib = normalize1(torch.Tensor(ta.distribution))
+        tuMDistrib = normalize1(torch.Tensor(tu.distribution))
         if va: 
-            vannoMdistrib = normalize1(torch.Tensor(va.getDistribution(1)))
-            vannoBdistrib = normalize1(torch.Tensor(va.distribution))
+            vaMdistrib = normalize1(torch.Tensor(va.getDistribution(1)))
+            vaBdistrib = normalize1(torch.Tensor(va.distribution))
         if vu:
-            vunannoDistrib = normalize1(torch.Tensor(vu.distribution))
+            vuMdistrib = normalize1(torch.Tensor(vu.distribution))
 
         # get all optimizers and schedulers
         gop, gsg = self.getBranchOptimizerAndScheduler('default')
@@ -87,35 +86,37 @@ class ToyNetTrainer(Trainer):
             print('Warning: You are using CPU for training. Be careful of its temperature...')
 
         def trainInBatch(X, Ym, Yb=None, ops=None, mweight=None, bweight=None, name=''):
-            if self.cur_epoch < unanno_only_epoch: Yb = None
+            N = Ym.shape[0]
             X = X.to(self.device)
             Ym = Ym.to(self.device)
             if Yb is not None: Yb = Yb.to(self.device)
             if mweight is not None: mweight = mweight.to(self.device)
             if bweight is not None: bweight = bweight.to(self.device)
-            loss, summary = self.net.loss(X, Ym, Yb, self.piter, mweight, bweight)
+            res, loss, summary = self.net.lossWithResult(
+                X, Ym, 
+                None if self.cur_epoch < unanno_only_epoch else Yb, 
+                self.piter, mweight, bweight
+            )
+            if name:
+                self.total_batch += 1
+                self.logSummary(name, summary, self.total_batch)
             if ops:
                 loss.backward()
                 for i in ops:
                     i.step()
                     i.zero_grad()
-            if name:
-                self.total_batch += 1
-                self.logSummary(name, summary, self.total_batch)
-            bar.next(Ym.shape[0])
+                bar.next(N)
+                if self.adversarial and Yb is not None:
+                    res = res[0][-2:]
+                    dloss = self.net.discriminatorLoss(*res, Ym, Yb, piter=self.piter)
+                    dloss.backward()
+                    dop.step()
+                    dop.zero_grad()
+                    bar.next(N)
+                    return loss.detach_(), dloss.detach_()
+            else: bar.next(N)
             return loss.detach_(),
         trainWithDataset = Batched(trainInBatch)
-
-        def trainDiscriminator(X, Ym, Yb):
-            X = X.to(self.device)
-            Ym = Ym.to(self.device)
-            Yb = Yb.to(self.device)
-            loss = self.net.discriminatorLoss(X, Ym, Yb, piter=self.piter)
-            loss.backward()
-            dop.step()
-            dop.zero_grad()
-            bar.next(Ym.shape[0])
-            return loss.detach_(),
 
         if self.cur_epoch == 0:
             self.board.add_graph(self.net, ta.tensors[0][:2].to(self.device))
@@ -129,12 +130,11 @@ class ToyNetTrainer(Trainer):
             self.net.train()
             bar = Bar('epoch T%03d' % self.cur_epoch, max=len(tu) + (len(ta) << int(self.adversarial)))
             tull, = trainWithDataset(
-                uloader, ops = ops, name='unannotated', mweight=unannoDistrib
+                uloader, ops = ops, name='unannotated', mweight=tuMDistrib
             )
-            tall, = trainWithDataset(
-                aloader, ops = ops, name='annotated', mweight=annoMdistrib, bweight=annoBdistrib
+            tall, dll = trainWithDataset(
+                aloader, ops = ops, name='annotated', mweight=taMdistrib, bweight=taBdistrib
             )
-            if self.adversarial: dll, = Batched(trainDiscriminator)(aloader)
             bar.finish()
 
             amerr, berr = self.score('annotated/trainset', ta)          # trainset score
@@ -155,8 +155,8 @@ class ToyNetTrainer(Trainer):
                 vll = []
                 lenn = lambda x: len(x) if x else 0
                 bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(va) + lenn(vu))
-                if va: vll.append(*trainWithDataset(valoader, mweight=vannoMdistrib, bweight=vannoBdistrib))
-                if vu: vll.append(*trainWithDataset(vuloader, mweight=vunannoDistrib))
+                if va: vll.append(*trainWithDataset(valoader, mweight=vaMdistrib, bweight=vaBdistrib))
+                if vu: vll.append(*trainWithDataset(vuloader, mweight=vuMdistrib))
                 bar.finish()
                 ll = (ll + torch.cat(vll).mean()) / 2
             
