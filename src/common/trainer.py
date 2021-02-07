@@ -9,6 +9,7 @@ import os
 
 import torch
 from tensorboardX import SummaryWriter
+from collections import defaultdict
 
 class Trainer:
     cur_epoch = 0
@@ -23,7 +24,7 @@ class Trainer:
         self.paths = conf.get('paths', {})
         self.training = conf.get('training', {})
         self.op_conf = conf.get('optimizer', ('SGD', {}))
-        self.dataloader = conf.get('dataloader', {})
+        self.dataloader = defaultdict(dict, conf.get('dataloader', {}))
         self.model_conf = conf.get('model', {})
 
         self.net = Net(**self.model_conf)

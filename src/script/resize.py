@@ -1,6 +1,7 @@
 import cv2 as cv
 import numpy as np
 import os
+import yaml
 
 D = './data/BIRADs/crafted'
 
@@ -21,6 +22,16 @@ def resize(dataset):
         cv.imwrite(DDP, rimg)
         print(DDP, img.shape, '->', rimg.shape)
 
+def resizeWithCluster(path):
+    with open(path) as f:
+        boxes, dic = yaml.safe_load_all(f)
+        for k, v in dic.items():
+            img = cv.imread(k, 0)
+            rimg = cv.resize(img, tuple(boxes[v][::-1]))
+            cv.imwrite(k, rimg)
+            print(k, img.shape, '->', rimg.shape)
+
 if __name__ == "__main__":
-    for i in ['B', 'XPB', 'case']:
-        resize(i)
+    # for i in ['B', 'XPB', 'case']:
+    #     resize(i)
+    resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')

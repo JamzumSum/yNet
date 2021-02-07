@@ -4,84 +4,81 @@ import cv2 as cv
 import numpy as np
 import torch
 import yaml
+from collections import defaultdict
 
-D = './data/BIRADs/crafted'
 BIRAD_NAME = ['2', '3', '4a', '4b', '4c', '5']
 
-def check_annotation():
-    DD = os.path.join(D, 'B')
-    pics = os.listdir(DD)
-    with open(os.path.join(D, 'BIRADs.yml')) as f:
-        ans = yaml.safe_load(f)
-        for i in pics:
-            if i[:-4] not in ans:
-                print(os.path.join(DD, i))
-
-def FSCache():
-    X = []; Ym = []; Yb = []
+def FSCache(inpath, outpath, datasets):
+    shapedic = defaultdict(list)
     bans = mans = None
-    with open(os.path.join(D, 'BIRADs.yml')) as f: bans = yaml.safe_load(f)
-    with open(os.path.join(D, 'malignant.yml')) as f: mans = yaml.safe_load(f)
+    with open(os.path.join(inpath, 'labels.yml')) as f: mans, bans = yaml.safe_load_all(f)
 
-    for dataset in ['B', 'case']:
-        DD = os.path.join(D, dataset)
+    for D in datasets:
+        DD = os.path.join(inpath, D)
         pics = os.listdir(DD)
         for i in pics:
             DDP = os.path.join(DD, i)
-            img = cv.imread(DDP)
-            birad = BIRAD_NAME.index('2' if dataset == 'case' else bans[i[:-4]])
+            img = cv.imread(DDP, 0)
+            img = torch.from_numpy(cv.equalizeHist(img))
+            img = img / img.max()
+            birad = BIRAD_NAME.index('2' if D == 'case' else bans[i[:-4]])
 
-            X.append(img)
-            Ym.append(mans[i[:-4]] if dataset == 'B' else 0)
-            Yb.append(birad)
+            shapedic[img.shape].append((
+                img, mans[i[:-4]], birad
+            ))
 
-    s = sorted(zip(X, Ym, Yb), key=lambda t: t[2])
-    X, Ym, Yb = ([t[i] for t in s] for i in range(3))
+    for k, v in shapedic.items():
+        s = sorted(v, key=lambda t: t[2])
+        X, Ym, Yb = ([t[i] for t in s] for i in range(3))
+        X = torch.stack(X).unsqueeze_(1)
+        Ym = torch.LongTensor(Ym)
+        Yb = torch.LongTensor(Yb)
+        shapedic[k] = (X, Ym, Yb)
 
-    X = torch.from_numpy(np.array(X))         # [N, H, W, C]
-    Ym = torch.from_numpy(np.array(Ym))
-    Yb = torch.from_numpy(np.array(Yb))
-    
-    X = X.permute(0, 3, 1, 2)     # [N, C, H, W]
-
-    assert X.shape[1] == 3
     torch.save(
         {
-            'X': X / 255, 
-            'Ym': Ym,
-            'Ybirad': Yb, 
-            'cls_name': BIRAD_NAME
+            'data': shapedic, 
+            'classname': [
+                ['bengin', 'malignant'], 
+                BIRAD_NAME
+            ]
         }, 
-        os.path.join(D, '../annotated.pt')
+        os.path.join(outpath, 'annotated.pt')
     )
-    print('%d items cached.' % X.shape[0])
+    return shapedic
 
-def WSCache():
-    DD = os.path.join(D, 'XPB')
+def WSCache(inpath, outpath):
+    DD = os.path.join(inpath, 'XPB')
     mans = None
-    with open(os.path.join(D, 'malignant.yml')) as f: mans = yaml.safe_load(f)
+    with open(os.path.join(inpath, 'labels.yml')) as f: mans, _ = yaml.safe_load_all(f)
 
-    X = []; Ym = []
+    shapedic = defaultdict(list)
     for i in os.listdir(DD):
-        X.append(cv.imread(os.path.join(DD, i)))
-        Ym.append(mans[i[:-4]])
+        img = cv.imread(os.path.join(DD, i), 0)
+        img = torch.from_numpy(cv.equalizeHist(img))
+        shapedic[img.shape].append((
+            img, mans[i[:-4]]
+        ))
 
-    s = sorted(zip(X, Ym), key=lambda t: t[1])
-    X, Ym = ([t[i] for t in s] for i in range(2))
-
-    X = torch.from_numpy(np.array(X)).permute(0, 3, 1, 2)    # [N, C, H, W]
-    Ym = torch.from_numpy(np.array(Ym))
+    for k, v in shapedic.items():
+        s = sorted(v, key=lambda t: t[1])
+        X, Ym = ([t[i] for t in s] for i in range(2))
+        X = torch.stack(X).unsqueeze_(1)
+        Ym = torch.LongTensor(Ym)
+        shapedic[k] = (X, Ym)
     
     torch.save(
         {
-            'X': X / 255, 
-            'Ym': Ym
+            'data': shapedic, 
+            'classname': [
+                ['bengin', 'malignant'], 
+            ]
         }, 
-        os.path.join(D, '../unannotated.pt')
+        os.path.join(outpath, 'unannotated.pt')
     )
-    print('%d items cached.' % X.shape[0])
+    return shapedic
 
 if __name__ == "__main__":
-    # check_annotation()
-    FSCache()
-    WSCache()
+    dic = FSCache('./data/BIRADs/crafted', './data/BIRADs', ['B', 'case'])
+    for k, v in dic.items():
+        print(k, len(v[0]), 'items cached')

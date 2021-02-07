@@ -45,11 +45,7 @@ branch:
       cooldown: 0
 
 dataloader:
-  annotated:
-    batch_size: 11
-    shuffle: True
-    drop_last: True
-  unannotated:
+  training:
     batch_size: 11
     shuffle: True
   scoring:

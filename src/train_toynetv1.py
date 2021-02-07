@@ -1,18 +1,18 @@
 import os
 
-from dataloader import trainValidSplit
+from dataset import classSpecSplit, CachedDatasetGroup
 from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
 
-(ta, tu), (va, vu) = trainValidSplit(8, 2)
+ta, va = classSpecSplit(CachedDatasetGroup('./data/BIRADs/annotated.pt'), 8, 2)
 print('trainset A distribution:', ta.distribution)
-print('trainset U distribution:', tu.distribution)
+# print('trainset U distribution:', tu.distribution)
 print('validation A distribution:', va.distribution)
-print('validation U distribution:', vu.distribution)
+# print('validation U distribution:', vu.distribution)
 
-trainer = ToyNetTrainer(ToyNetV1.WCDVer(), getConfig('./config/toynetv1.yml'))
-trainer.train(ta, tu, va, vu)
+trainer = ToyNetTrainer(ToyNetV1, getConfig('./config/toynetv1.yml'))
+trainer.train(ta, vd=va)
 
 post = trainer.paths.get('post_training', '')
 if post and os.path.exists(post):

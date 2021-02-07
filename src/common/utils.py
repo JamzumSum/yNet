@@ -56,48 +56,49 @@ def gray2JET(x, thresh=.5):
 
 class ConfusionMatrix:
     def __init__(self, K=None, smooth=1e-8):
-        if K: self.m = torch.zeros(K, K, dtype=torch.int)
+        if K: self._m = torch.zeros(K, K, dtype=torch.int)
         self.K = K
         self.eps = smooth
         
     @property
-    def initiated(self): return hasattr(self, 'm')
+    def initiated(self): return hasattr(self, '_m')
     @property
-    def N(self): return self.m.sum() if self.initiated else None
+    def N(self): return self._m.sum() if self.initiated else None
 
     def add(self, P, Y):
         '''P&Y: [N]'''
-        assert P.dtype == torch.int
-        assert Y.dtype == torch.int
+        INTTYPE = (torch.int, torch.int64, torch.int16)
+        assert P.dtype in INTTYPE
+        assert Y.dtype in INTTYPE
         if self.K: K = self.K
         else: self.K = K = int(Y.max())
 
         if not self.initiated: 
-            self.m = torch.zeros(K, K, dtype=torch.int, device=P.device)
-        if self.m.device != P.device: 
-            self.m = self.m.to(P.device)
+            self._m = torch.zeros(K, K, dtype=torch.int, device=P.device)
+        if self._m.device != P.device: 
+            self._m = self._m.to(P.device)
         if Y.device != P.device:
             Y = Y.to(P.device)
 
         for i, j in product(range(K), range(K)):
-            self.m[i, j] += ((P == i) * (Y == j)).sum()
+            self._m[i, j] += ((P == i) * (Y == j)).sum()
     
     def accuracy(self):
-        acc = self.m.diag().sum()
-        return acc / self.m.sum()
+        acc = self._m.diag().sum()
+        return acc / self._m.sum()
 
     def err(self, *args, **kwargs): 
         return 1 - self.accuracy(*args, **kwargs)
     
     def precision(self, reduction='none'):
-        acc = self.m.diag()
-        prc = acc / (self.m.sum(dim=1) + self.eps)
+        acc = self._m.diag()
+        prc = acc / (self._m.sum(dim=1) + self.eps)
         if reduction == 'mean': return prc.mean()
         else: return prc
 
     def recall(self, reduction='none'):
-        acc = self.m.diag()
-        rec = acc / (self.m.sum() - self.m.sum(dim=0) - self.m.sum(dim=1) + self.m.diag() + self.eps)
+        acc = self._m.diag()
+        rec = acc / (self._m.sum() - self._m.sum(dim=0) - self._m.sum(dim=1) + self._m.diag() + self.eps)
         if reduction == 'mean': return rec.mean()
         else: return rec
 
@@ -107,3 +108,6 @@ class ConfusionMatrix:
         f = (1 + beta * beta) * (P * R) / (beta * beta * P + R + self.eps)
         if reduction == 'mean': return f.mean()
         else: return f
+
+    def mat(self):
+        return self._m / self._m.max()

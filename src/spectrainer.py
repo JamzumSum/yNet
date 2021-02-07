@@ -9,12 +9,14 @@ from itertools import chain
 import torch
 import torch.nn.functional as F
 from progress.bar import Bar
-from torch.utils.data import DataLoader
 
 from common.decorators import Batched, KeyboardInterruptWrapper, NoGrad
 from common.trainer import Trainer
 from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
 from utils.dict import shallow_update
+from dataset import Fix3Loader
+
+lenn = lambda x: len(x) if x else 0
 
 class ToyNetTrainer(Trainer):
     @property
@@ -50,26 +52,18 @@ class ToyNetTrainer(Trainer):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **shallow_update(self.sg_conf, sg_arg, True))
         return optimizer, scheduler
 
-    def train(self, ta, tu, va=None, vu=None):
+    def train(self, td, vd):
         # get all loaders
-        aloader = DataLoader(ta, **self.dataloader.get('annotated', {}))
-        uloader = DataLoader(tu, **self.dataloader.get('unannotated', {}))
-        if va: 
-            valoader = DataLoader(va, batch_size=aloader.batch_size)
-        if vu:
-            vuloader = DataLoader(vu, batch_size=uloader.batch_size)
-        unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
-
         # cache all distributions, for they are constants
         normalize1 = lambda x: x / x.sum()
-        taMdistrib = normalize1(torch.Tensor(ta.getDistribution(1)))
-        taBdistrib = normalize1(torch.Tensor(ta.distribution))
-        tuMDistrib = normalize1(torch.Tensor(tu.distribution))
-        if va: 
-            vaMdistrib = normalize1(torch.Tensor(va.getDistribution(1)))
-            vaBdistrib = normalize1(torch.Tensor(va.distribution))
-        if vu:
-            vuMdistrib = normalize1(torch.Tensor(vu.distribution))
+        aloader = Fix3Loader(td, device=self.device, **self.dataloader['training'])
+        taMdistrib = normalize1(td.getDistribution(0)).to(self.device)
+        taBdistrib = normalize1(td.getDistribution(1)).to(self.device)
+        valoader = Fix3Loader(vd, device=self.device, batch_size=aloader.batch_size)
+        vaMdistrib = normalize1(vd.getDistribution(0)).to(self.device)
+        vaBdistrib = normalize1(vd.getDistribution(1)).to(self.device)
+
+        unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
 
         # get all optimizers and schedulers
         gop, gsg = self.getBranchOptimizerAndScheduler('default')
@@ -87,11 +81,6 @@ class ToyNetTrainer(Trainer):
 
         def trainInBatch(X, Ym, Yb=None, ops=None, mweight=None, bweight=None, name=''):
             N = Ym.shape[0]
-            X = X.to(self.device)
-            Ym = Ym.to(self.device)
-            if Yb is not None: Yb = Yb.to(self.device)
-            if mweight is not None: mweight = mweight.to(self.device)
-            if bweight is not None: bweight = bweight.to(self.device)
             res, loss, summary = self.net.lossWithResult(
                 X, Ym, 
                 None if self.cur_epoch < unanno_only_epoch else Yb, 
@@ -119,46 +108,38 @@ class ToyNetTrainer(Trainer):
         trainWithDataset = Batched(trainInBatch)
 
         if self.cur_epoch == 0:
-            self.board.add_graph(self.net, ta.tensors[0][:2].to(self.device))
-            
+            demo = next(iter(td))[0][:2].to(self.device)
+            self.board.add_graph(self.net, demo)
+            del demo
+
         ops = (gop, )
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             if self.cur_epoch == unanno_only_epoch:
                 ops = (mop, bop)
-                print('Use annotated datasets from current epoch.')
+                print('Train b-branch from current epoch.')
                 print('Optimizer is seperated from now.')
             self.net.train()
-            bar = Bar('epoch T%03d' % self.cur_epoch, max=len(tu) + (len(ta) << int(self.adversarial)))
-            tull, = trainWithDataset(
-                uloader, ops = ops, name='unannotated', mweight=tuMDistrib
-            )
-            tall, dll = trainWithDataset(
-                aloader, ops = ops, name='annotated', mweight=taMdistrib, bweight=taBdistrib
+            bar = Bar('epoch T%03d' % self.cur_epoch, max=(lenn(td) << int(self.adversarial)))
+            res = trainWithDataset(
+                aloader, ops = ops, name='ourset', mweight=taMdistrib, bweight=taBdistrib
             )
             bar.finish()
+            if self.adversarial: tll, dll = res
+            else: tll, = res
 
-            amerr, berr = self.score('annotated/trainset', ta)          # trainset score
-            umerr, _ = self.score('unannotated/trainset', tu)
-            if va: 
-                amerr, berr = self.score('annotated/validation', va)    # validation score
-            if vu: 
-                umerr, _ = self.score('unannotated/validation', vu)
-            merr = (amerr + umerr) / 2
+            merr, _ = self.score('ourset/trainset', td)          # trainset score
+            merr, _ = self.score('ourset/validation', vd)        # validation score
 
             if merr < self.best_mark:
                 self.best_mark = merr
                 self.save('best', merr)
             self.save('latest', merr)
 
-            ll = torch.cat((tull, tall)).mean()
-            if va or vu:
-                vll = []
-                lenn = lambda x: len(x) if x else 0
-                bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(va) + lenn(vu))
-                if va: vll.append(*trainWithDataset(valoader, mweight=vaMdistrib, bweight=vaBdistrib))
-                if vu: vll.append(*trainWithDataset(vuloader, mweight=vuMdistrib))
-                bar.finish()
-                ll = (ll + torch.cat(vll).mean()) / 2
+            bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(vd))
+            vll = trainWithDataset(valoader, mweight=vaMdistrib, bweight=vaBdistrib)
+            vll = torch.cat(vll).mean()
+            bar.finish()
+            ll = (tll + vll) / 2
             
             if dsg: dsg.step(dll.mean())
             if self.cur_epoch < unanno_only_epoch: 
@@ -173,10 +154,9 @@ class ToyNetTrainer(Trainer):
         Score and evaluate the given dataset.
         '''
         self.net.eval()
-        annotated = len(dataset.tensors) == 3
         mcm = ConfusionMatrix(2)
+        bcm = ConfusionMatrix(self.net.K)
         dcm = ConfusionMatrix(2) if self.adversarial else None
-        bcm = ConfusionMatrix(self.net.K) if annotated else None
 
         def scoresInBatch(X, Ym, Yb=None):
             nonlocal mcm, dcm, bcm
@@ -202,16 +182,19 @@ class ToyNetTrainer(Trainer):
                 dcm.add(cy1, torch.ones_like(cy1))
             return Pm, Pb
         
-        loader = DataLoader(dataset, **self.dataloader.get('scoring', {}))
+        loader = Fix3Loader(dataset, device=self.device, **self.dataloader['scoring'])
         Pm, Pb = Batched(scoresInBatch)(loader)
 
-        cmdic = {'malignant': mcm}; errl = []
-        if annotated: cmdic['BIRADs'] = bcm
+        cmdic = {
+            'malignant': mcm, 
+            'BIRADs': bcm,
+        }
+        errl = []
         if self.adversarial: cmdic['discriminator'] = dcm
 
         for k, v in cmdic.items():
             errl.append(v.err())
-            self.board.add_image('ConfusionMat/%s/%s' % (k, caption), v.m, self.cur_epoch, dataformats='HW')
+            self.board.add_image('ConfusionMat/%s/%s' % (k, caption), v.mat(), self.cur_epoch, dataformats='HW')
             self.board.add_scalar('err/%s/%s' % (k, caption), errl[-1], self.cur_epoch)
             self.board.add_scalar('f1/%s/%s' % (k, caption), v.fscore(), self.cur_epoch)
         

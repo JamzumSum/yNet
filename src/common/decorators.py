@@ -1,6 +1,7 @@
 from functools import wraps
 
 import torch
+from collections import defaultdict
 
 class KeyboardInterruptWrapper:
     def __init__(self, solution):
@@ -21,12 +22,19 @@ def NoGrad(func):
             return func(*args, **kwargs)
     return nogradwrapper
 
-def Batched(func):
+def Batched(func, bar=None):
     @wraps(func)
     def thatinloader(loader, *args, **kwargs):
+        
         res = [func(*d, *args, **kwargs) for d in loader]
         if not res or res[0] is None: return
-        N = len(res[0])
-        res = [[d[i] for d in res] for i in range(N)]
-        return tuple((torch.cat if d[0].dim() > 0 else torch.stack)(d) for d in res)
+
+        resdic = defaultdict(list)
+        for r in res:
+            for j, t in enumerate(r):
+                resdic[j].append(t)
+        for k, v in resdic.items():
+            f = torch.cat if v[0].dim() > 0 else torch.stack
+            resdic[k] = f(v, dim=0)
+        return tuple(resdic[i] for i in range(len(resdic)))
     return thatinloader
