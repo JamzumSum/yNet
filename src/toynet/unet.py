@@ -8,6 +8,7 @@ A torch implement for U-Net.
 '''
 import torch
 import torch.nn as nn
+from common.decorators import checkpoint, CheckpointSupport
 
 class ChannelInference:
     def __init__(self, ic, oc):
@@ -23,18 +24,20 @@ class ConvStack2(nn.Sequential, ChannelInference):
             self, 
             nn.Conv2d(ic, oc, 3, 1, 1), 
             nn.ReLU(),
-            nn.Conv2d(oc, oc, 3, 1, 1), 
+            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), 
             nn.BatchNorm2d(oc),
             nn.ReLU()
         )
         ChannelInference.__init__(self, ic, oc)
+
 class DownConv(nn.Conv2d, ChannelInference):
     '''
     [N, C, H, W] -> [N, C, H//2, W//2]
     '''
     def __init__(self, ic):
-        nn.Conv2d.__init__(self, ic, ic, 1, 2)
+        nn.Conv2d.__init__(self, ic, ic, 2, 2, bias=False)
         ChannelInference.__init__(self, ic, ic)
+        torch.nn.init.constant_(self.weight, 0.25)
 
 class UpConv(nn.Sequential, ChannelInference):
     '''
@@ -46,24 +49,25 @@ class UpConv(nn.Sequential, ChannelInference):
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False), 
             # NOTE: Since 2x2 conv cannot be aligned when the shape is odd, 
             # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
-            nn.Conv2d(ic, ic//2, 3, 1, 1),      
+            nn.Conv2d(ic, ic//2, 3, 1, 1, bias=False),      
             nn.BatchNorm2d(ic // 2)
         )
-        self.BN = nn.BatchNorm2d(ic // 2)
         ChannelInference.__init__(self, ic, ic // 2)
 
 class UNet(nn.Module):
     '''
     [N, ic, H, W] -> [N, fc, H, W], [N, oc, H, W]
     '''
-    def __init__(self, ic, oc, fc=64, softmax=False):
+    def __init__(self, ic, oc, level=4, fc=64, softmax=False, memory_trade=False):
         nn.Module.__init__(self)
+        self.level = level
         self.softmax = softmax
+        self.cps = CheckpointSupport(memory_trade)
 
         self.L1 = ConvStack2(ic, fc)
         cc = self.L1.oc
 
-        for i in range(4):
+        for i in range(level):
             dsample = DownConv(cc)
             cc = dsample.oc
             conv = ConvStack2(cc, oc=cc * 2)
@@ -71,7 +75,7 @@ class UNet(nn.Module):
             self.add_module('D%d' % (i + 1), dsample)
             self.add_module('L%d' % (i + 2), conv)
 
-        for i in range(4):
+        for i in range(level):
             usample = UpConv(cc)
             cc = usample.oc
             conv = ConvStack2(cc * 2, cc)
@@ -80,6 +84,9 @@ class UNet(nn.Module):
             self.add_module('L%d' % (i + 6), conv)
         
         self.DW = nn.Conv2d(fc, oc, 1)
+
+    def add_module(self, name, model):
+        return nn.Module.add_module(self, name, self.cps(model))
 
     def _padCat(self, X, Y):
         '''
@@ -101,23 +108,30 @@ class UNet(nn.Module):
         '''
         X: [N, C, H, W]
         O: [N, fc, H, W], [N, oc, H, W]
-        '''
-        x1 = self.L1(X)             # [N, fc, H, W]
-        x2 = self.L2(self.D1(x1))   # [N, 2*fc, H//2, W//2]
-        x3 = self.L3(self.D2(x2))   # [N, 4*fc, H//4, W//4]
-        x4 = self.L4(self.D3(x3))   # [N, 8*fc, H//8, W//8]
-        x5 = self.L5(self.D4(x4))   # [N, 16*fc, H//16, W//16]
+        '''        
+        if self.cps.memory_trade: X = X.clone().requires_grad_()
+        xn = [self.L1(X)]
+        L_ = lambda i: self._modules['L%d' % i]
+        D_ = lambda i: self._modules['D%d' % i]
+        U_ = lambda i: self._modules['U%d' % i]
+        X_ = lambda i: xn[i - 1]
 
-        x6 = self.L6(self._padCat(x4, self.U1(x5)))     # [N, 8*fc, H//8, W//8]
-        x7 = self.L7(self._padCat(x3, self.U2(x6)))     # [N, 4*fc, H//4, W//4]
-        x8 = self.L8(self._padCat(x2, self.U3(x7)))     # [N, 2*fc, H//2, W//2]
-        x9 = self.L9(self._padCat(x1, self.U4(x8)))     # [N, fc, H, W]
-        logit = self.DW(x9)         # [N, oc, H, W]
+        for i in range(1, self.level + 1):
+            xn.append(L_(i + 1)(D_(i)(xn[-1])))   # [N, t * fc, H//t, W//t], t = 2^i
+
+        for i in range(self.level):
+            xn.append(L_(self.level + i + 2)(
+                # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
+                self._padCat(X_(self.level - i), U_(i + 1)(X_(self.level + i + 1)))
+            ))
+
+        finalx = xn[-1]
+        logit = self.DW(finalx)     # [N, oc, H, W]
 
         if self.softmax: 
-            return x9, torch.softmax(logit, 1)
+            return finalx, torch.softmax(logit, 1)
         else: 
-            return x9, torch.sigmoid(logit)
+            return finalx, torch.sigmoid(logit)
 
 if __name__ == "__main__":
     unet = UNet(3, 1, 16)

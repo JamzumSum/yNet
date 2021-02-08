@@ -5,7 +5,7 @@ import yaml
 
 D = './data/BIRADs/crafted'
 
-def resize(dataset):
+def CentralCrop(dataset):
     DD = os.path.join(D, dataset)
     pics = os.listdir(DD)
     for i in pics:
@@ -32,6 +32,6 @@ def resizeWithCluster(path):
             print(k, img.shape, '->', rimg.shape)
 
 if __name__ == "__main__":
-    # for i in ['B', 'XPB', 'case']:
-    #     resize(i)
-    resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')
+    for i in ['B', 'case']:
+        CentralCrop(i)
+    # resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')

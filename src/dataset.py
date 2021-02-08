@@ -4,11 +4,13 @@ Dataset for BIRADs images & annotations. Supports multi-scale images.
 * author: JamzumSum
 * create: 2021-1-13
 '''
-import torch
-from torch.utils.data import DataLoader, TensorDataset, random_split, ConcatDataset, Subset
-from torch.utils.data._utils.collate import default_collate
 from collections import defaultdict
 from itertools import chain
+
+import torch
+from torch.utils.data import (ConcatDataset, DataLoader, Subset, TensorDataset,
+                              random_split)
+
 
 def count(T, K):
     d = torch.zeros(K)
@@ -112,18 +114,6 @@ def classSpecSplit(dataset: DistributedDatasetList, t, v):
     for dic in (tcs, vcs):
         for k, v in dic.items():
             transpose = [[t[i] for t in chain(*v)] for i in range(N)]
-            tensors = [(torch.cat if i[0].dim() else torch.stack)(i, dim=0) for i in transpose]
+            tensors = [torch.stack(i) for i in transpose]
             dic[k] = DistributedDataset(*tensors, countOn=countOn)
     return DistributedDatasetList(tcs.values(), meta), DistributedDatasetList(vcs.values(), meta)
-
-class Fix3Loader(DataLoader):
-    def __init__(self, dataset, device=None, **config):
-        DataLoader.__init__(self, dataset, **config, collate_fn=lambda x: Fix3Loader.fix3(self, x))
-        self.device = device
-
-    def fix3(self, x):
-        x = default_collate(x)
-        x = list(x) + [None] * (3 - len(x))
-        if self.device: 
-            x = [None if i is None else i.to(self.device) for i in x]
-        return x

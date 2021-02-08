@@ -7,6 +7,7 @@ model:      # model constructor
     - 128
   fc: 16
   pi: 0.5
+  memory_trade: True
 
 # training strategy
 training:  
@@ -46,10 +47,10 @@ branch:
 
 dataloader:
   training:
-    batch_size: 11
+    batch_size: 16
     shuffle: True
   scoring:
-    batch_size: 8
+    batch_size: 16
     
 paths:
   model_dir: model/toynetv1/seplr

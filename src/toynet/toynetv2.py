@@ -92,7 +92,7 @@ class ToyNetV2(ToyNetV1):
         warmup = self.b * mathexp(-5 * (1 - piter))
         summary['interbranch/mutual_info'] = info
 
-        return loss + warmup * info, summary
+        return res, loss + warmup * info, summary
 
     @staticmethod
     def WCDVer(): return WithCD(ToyNetV2)

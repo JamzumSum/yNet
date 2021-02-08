@@ -10,11 +10,12 @@ import torch
 import torch.nn.functional as F
 from progress.bar import Bar
 
-from common.decorators import Batched, KeyboardInterruptWrapper, NoGrad
+from common.decorators import Batched, NoGrad
 from common.trainer import Trainer
 from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
 from utils.dict import shallow_update
-from dataset import Fix3Loader
+from dataloader import Fix3Loader
+
 
 lenn = lambda x: len(x) if x else 0
 
@@ -56,12 +57,12 @@ class ToyNetTrainer(Trainer):
         # get all loaders
         # cache all distributions, for they are constants
         normalize1 = lambda x: x / x.sum()
-        aloader = Fix3Loader(td, device=self.device, **self.dataloader['training'])
-        taMdistrib = normalize1(td.getDistribution(0)).to(self.device)
-        taBdistrib = normalize1(td.getDistribution(1)).to(self.device)
-        valoader = Fix3Loader(vd, device=self.device, batch_size=aloader.batch_size)
-        vaMdistrib = normalize1(vd.getDistribution(0)).to(self.device)
-        vaBdistrib = normalize1(vd.getDistribution(1)).to(self.device)
+        loader = Fix3Loader(td, device=self.device, **self.dataloader['training'])
+        tMdistrib = normalize1(1 / td.getDistribution(countOn=0)).to(self.device)
+        tBdistrib = normalize1(1 / td.getDistribution(countOn=1)).to(self.device)
+        vloader = Fix3Loader(vd, device=self.device, batch_size=loader.batch_size)
+        vMdistrib = normalize1(1 / vd.getDistribution(countOn=0)).to(self.device)
+        vBdistrib = normalize1(1 / vd.getDistribution(countOn=1)).to(self.device)
 
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
 
@@ -78,6 +79,8 @@ class ToyNetTrainer(Trainer):
         # lemme see who dare to use cpu for training ???
         if self.device.type == 'cpu':
             print('Warning: You are using CPU for training. Be careful of its temperature...')
+        else:
+            torch.cuda.reset_peak_memory_stats()
 
         def trainInBatch(X, Ym, Yb=None, ops=None, mweight=None, bweight=None, name=''):
             N = Ym.shape[0]
@@ -108,7 +111,7 @@ class ToyNetTrainer(Trainer):
         trainWithDataset = Batched(trainInBatch)
 
         if self.cur_epoch == 0:
-            demo = next(iter(td))[0][:2].to(self.device)
+            demo = next(iter(loader))[0][:2]
             self.board.add_graph(self.net, demo)
             del demo
 
@@ -116,37 +119,41 @@ class ToyNetTrainer(Trainer):
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             if self.cur_epoch == unanno_only_epoch:
                 ops = (mop, bop)
-                print('Train b-branch from current epoch.')
+                print('Train b-branch from epoch%03d.' % unanno_only_epoch)
                 print('Optimizer is seperated from now.')
             self.net.train()
             bar = Bar('epoch T%03d' % self.cur_epoch, max=(lenn(td) << int(self.adversarial)))
             res = trainWithDataset(
-                aloader, ops = ops, name='ourset', mweight=taMdistrib, bweight=taBdistrib
+                loader, ops = ops, name='ourset', mweight=tMdistrib, bweight=tBdistrib
             )
             bar.finish()
-            if self.adversarial: tll, dll = res
+            if self.adversarial: 
+                tll, dll = res
+                dll = dll.mean()
             else: tll, = res
-
-            merr, _ = self.score('ourset/trainset', td)          # trainset score
-            merr, _ = self.score('ourset/validation', vd)        # validation score
-
-            if merr < self.best_mark:
-                self.best_mark = merr
-                self.save('best', merr)
-            self.save('latest', merr)
-
+            tll = tll.mean()
+            
             bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(vd))
-            vll = trainWithDataset(valoader, mweight=vaMdistrib, bweight=vaBdistrib)
+            vll = trainWithDataset(vloader, mweight=vMdistrib, bweight=vBdistrib)
             vll = torch.cat(vll).mean()
             bar.finish()
             ll = (tll + vll) / 2
             
-            if dsg: dsg.step(dll.mean())
+            if dsg: dsg.step(dll)
             if self.cur_epoch < unanno_only_epoch: 
                 if gsg: gsg.step(ll)
             else:
                 if msg: msg.step(ll)
                 if bsg: bsg.step(ll)
+
+            merr, _ = self.score('ourset/trainset', td)          # trainset score
+            merr, _ = self.score('ourset/validation', vd)        # validation score
+            self.traceNetwork()
+            
+            if merr < self.best_mark:
+                self.best_mark = merr
+                self.save('best', merr)
+            self.save('latest', merr)
 
     @NoGrad
     def score(self, caption, dataset):
@@ -203,7 +210,10 @@ class ToyNetTrainer(Trainer):
 
         if self.logHotmap:
             # BUG: since datasets are sorted, images extracted are biased. (Bengin & BIRADs-2)
-            X = next(iter(loader))[0].to(self.device)
+            # EMMM: but I don't know which image to sample, cuz if images are not fixed, 
+            # we cannot compare through epochs... and also, since scoring is not testing, 
+            # extracting (nearly) all mis-classified samples is excessive...
+            X = next(iter(loader))[0][:8].to(self.device)
             M, B, mw, bw = self.net(X)
             wsum = lambda x, w: (x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)).sum(dim=1)
             heatmap = lambda x, w: 0.7 * X + 0.1 * gray2JET(wsum(x, w), thresh=0.)

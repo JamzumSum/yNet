@@ -100,3 +100,8 @@ class Trainer:
     def logSummary(self, caption, summary: dict, step=None):
         for k, v in summary.items():
             self.board.add_scalar('%s/%s' % (k, caption), v, step)
+
+    def traceNetwork(self):
+        param = self.net.named_parameters()
+        for name, p in param:
+            self.board.add_histogram('network/' + name, p, self.cur_epoch)

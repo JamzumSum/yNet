@@ -2,18 +2,21 @@ from functools import wraps
 
 import torch
 from collections import defaultdict
+from torch.utils.checkpoint import checkpoint
 
-class KeyboardInterruptWrapper:
-    def __init__(self, solution):
-        self._s = solution
 
-    def __call__(self, func):
-        @wraps(func)
-        def KBISafeWrapper(*args, **kwargs):
-            try: return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                self._s(*args, **kwargs)
-        return KBISafeWrapper
+def checkpointed(func, **kwargs):
+    def checkpointWrapper(*args):
+        return checkpoint(func, *args, **kwargs)
+    return checkpointWrapper
+class CheckpointSupport:
+    def __init__(self, memory_trade=False):
+        self.memory_trade = memory_trade
+    
+    def __call__(self, instance):
+        if not self.memory_trade: return instance
+        instance.forward = checkpointed(instance.forward)
+        return instance
 
 def NoGrad(func):
     @wraps(func)

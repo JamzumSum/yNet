@@ -9,6 +9,7 @@ from math import log as mathlog
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from common.loss import F, focalBCE
 from common.utils import freeze
 
@@ -75,8 +76,9 @@ class BIRADsUNet(UNet):
     '''
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     '''
-    def __init__(self, ic, K, fc=64, pi=.5):
-        UNet.__init__(self, ic, oc=2, fc=fc)
+    def __init__(self, ic, K, fc=64, pi=.5, memory_trade=False):
+        UNet.__init__(self, ic, oc=2, fc=fc, memory_trade=memory_trade)
+        self.memory_trade = memory_trade
         # Set out_class=2 since we have two classes: malignant and bengin
         # Note that thought B/M are exclusive, but P(M) + P(B) != 1, 
         # for there might be inputs that contain no tumor. 
@@ -103,7 +105,7 @@ class BIRADsUNet(UNet):
             So set pi as 0.01 might be maladaptive...
         '''
         b = mathlog(pi / (1 - pi))
-        nn.init.constant_(self.DW.bias, b)
+        # nn.init.constant_(self.DW.bias, b)
         nn.init.constant_(self.BDW.bias, b)
 
     def seperatedParameters(self):
@@ -115,17 +117,18 @@ class BIRADsUNet(UNet):
 class ToyNetV1(nn.Module):
     support = ('hotmap', )
 
-    def __init__(self, in_channel, K, patch_sizes, fc=64, pi=0.01):
+    def __init__(self, in_channel, K, patch_sizes, fc=64, pi=0.01, memory_trade=False):
         nn.Module.__init__(self)
         self.K = K
-        self.backbone = BIRADsUNet(in_channel, K, fc, pi)
+        self.backbone = BIRADsUNet(in_channel, K, fc, pi, memory_trade)
         self.pooling = PyramidPooling(patch_sizes)
+        self.memory_trade = memory_trade
 
     def seperatedParameters(self):
         m, b = self.backbone.seperatedParameters()
         return chain(m, self.pooling.parameters()), b
 
-    def forward(self, X):
+    def forward(self, X, memory_trade=False):
         '''
         X: [N, ic, H, W]
         return: 
@@ -142,24 +145,37 @@ class ToyNetV1(nn.Module):
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
         return Mhead, Bhead, Pm, Pb
 
+    def quiz(self, X, M, B):
+        '''
+        A quiz to constrain network:
+        1. not to put weights on meaningless shadow area
+        '''
+        # padding runtime augment
+        randpad = 16 * torch.randint(4, (4,))
+        pad = lambda x: F.pad(x, list(randpad.tolist()), 'constant')
+        PX = pad(X); PM = pad(M); PB = pad(B)
+        fPM, fPB = self.forward(PX, self.memory_trade)[:2]
+        Mqloss = F.mse_loss(fPM, PM)
+        Bqloss = F.mse_loss(fPB, PB)
+        return Mqloss, Bqloss
+
     def _loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None):
         '''
         Protected for classes inherit from ToyNetV1.
         return: Original result, M-branch losses, B-branch losses.
         '''
-        res = self.forward(X)
+        res = self.forward(X, self.memory_trade)
         M, B, Pm, Pb = res
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
 
         Mloss = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=mweight)
-        Mpenalty = (M ** 2).mean()
+        Mpenalty, Bpenalty = self.quiz(X, M, B)
         zipM = (Mloss, Mpenalty)
 
         if Yb is None: zipB = None
         else:
             Bloss = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=bweight)
-            Bpenalty = (B ** 2).mean()
             zipB = (Bloss, Bpenalty)
 
         return res, zipM, zipB, None
@@ -177,10 +193,10 @@ class ToyNetV1(nn.Module):
         if zipB:
             Bloss, Bpenalty = zipB
             loss = loss + Bloss
-            penalty = penalty + 0.5 * Bpenalty
+            penalty = penalty + Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return res, loss + penalty / 4, summary
+        return res, loss + penalty, summary
 
     def loss(self, *args, **argv):
         '''
