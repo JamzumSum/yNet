@@ -5,7 +5,6 @@ from random import shuffle as shuffle_, choices
 import torch
 from torch.utils.data import (ConcatDataset, DataLoader, Sampler,
                               SequentialSampler, RandomSampler)
-from torch.utils.data._utils.collate import default_collate
 
 
 class ChainSubsetRandomSampler(Sampler[int]):
@@ -19,11 +18,13 @@ class ChainSubsetRandomSampler(Sampler[int]):
     def __len__(self):
         return sum(len(i) for i in self.sampler)
 
-class Fix3Loader(DataLoader):
+class FixLoader(DataLoader):
+    title = ('X', 'Ym', 'Yb'
+    )
     def __init__(self, dataset: ConcatDataset, batch_size=1, shuffle=False, device=None, **otherconf):
         DataLoader.__init__(
             self, dataset, batch_size, **otherconf,
-            collate_fn=lambda x: Fix3Loader.fix3(self, x), 
+            collate_fn=self.fixCollate, 
             sampler=(ChainSubsetRandomSampler if shuffle else SequentialSampler)(dataset)
         )
         self.device = device
@@ -37,23 +38,25 @@ class Fix3Loader(DataLoader):
         ax = [(augment(i[0]), *i[1:],) for i in ax]
         return x + ax
 
-    def fix3(self, x):
+    def fixCollate(self, x):
         '''
-        1. fix num of return vals to 3
+        1. fix num of return vals
         2. device transfering
         3. make sure only one shape in the batch.
         4. augment the batch if drop_last. For caller may expect any length of batch is fixed.
         '''
         N = len(x)
-        shapestat = defaultdict(int)
-        for i in x: shapestat[i[0].shape] += 1
-        mode = max(shapestat.items(), key=lambda i: i[1])[0]
-        x = [i for i in x if i[0].shape == mode]
+        hashf = lambda i: hash((i['X'].shape, 'Yb' in i, ))
+
+        hashstat = defaultdict(int)
+        for i in x: hashstat[hashf(i)] += 1
+        mode = max(hashstat.items(), key=lambda i: i[1])[0]
+        x = [i for i in x if hashf(i) == mode]
+
         if self.drop_last:
             x = self.augmentFromBatch(x, N)
 
-        x = default_collate(x)
-        x = list(x) + [None] * (3 - len(x))
+        x = {k: torch.stack([i[k] for i in x]) for k in x[0]}
         if self.device: 
-            x = [None if i is None else i.to(self.device) for i in x]
+            for k, v in x.items(): x[k] = v.to(self.device)
         return x

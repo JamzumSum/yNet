@@ -18,7 +18,9 @@ def birad_label():
             elif v: csv[k] = v[0]
             else:
                 print(k, 'IGNORED')
-        return csv
+    C = os.listdir('./data/BIRADs/raw/benign/BIRAD-2')
+    csv.update({i[:-4]: '2' for i in C})
+    return csv
 
 
 def malignant_label():

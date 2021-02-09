@@ -27,9 +27,9 @@ def NoGrad(func):
 
 def Batched(func, bar=None):
     @wraps(func)
-    def thatinloader(loader, *args, **kwargs):
+    def thatinloader(loader, **kwargs):
         
-        res = [func(*d, *args, **kwargs) for d in loader]
+        res = [func(**d, **kwargs) for d in loader]
         if not res or res[0] is None: return
 
         resdic = defaultdict(list)

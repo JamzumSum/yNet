@@ -14,10 +14,11 @@ from common.decorators import Batched, NoGrad
 from common.trainer import Trainer
 from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
 from utils.dict import shallow_update
-from dataloader import Fix3Loader
+from dataloader import FixLoader
 
 
 lenn = lambda x: len(x) if x else 0
+first = lambda it: next(iter(it))
 
 class ToyNetTrainer(Trainer):
     @property
@@ -57,12 +58,12 @@ class ToyNetTrainer(Trainer):
         # get all loaders
         # cache all distributions, for they are constants
         normalize1 = lambda x: x / x.sum()
-        loader = Fix3Loader(td, device=self.device, **self.dataloader['training'])
-        tMdistrib = normalize1(1 / td.getDistribution(countOn=0)).to(self.device)
-        tBdistrib = normalize1(1 / td.getDistribution(countOn=1)).to(self.device)
-        vloader = Fix3Loader(vd, device=self.device, batch_size=loader.batch_size)
-        vMdistrib = normalize1(1 / vd.getDistribution(countOn=0)).to(self.device)
-        vBdistrib = normalize1(1 / vd.getDistribution(countOn=1)).to(self.device)
+        loader = FixLoader(td, device=self.device, **self.dataloader['training'])
+        tMdistrib = normalize1(1 / td.getDistribution('Ym')).to(self.device)
+        tBdistrib = normalize1(1 / td.getDistribution('Yb')).to(self.device)
+        vloader = FixLoader(vd, device=self.device, batch_size=loader.batch_size)
+        vMdistrib = normalize1(1 / vd.getDistribution('Ym')).to(self.device)
+        vBdistrib = normalize1(1 / vd.getDistribution('Yb')).to(self.device)
 
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
 
@@ -82,7 +83,10 @@ class ToyNetTrainer(Trainer):
         else:
             torch.cuda.reset_peak_memory_stats()
 
-        def trainInBatch(X, Ym, Yb=None, ops=None, mweight=None, bweight=None, name=''):
+        def trainInBatch(
+            X, Ym, Yb=None, 
+            name='', ops=None, mweight=None, bweight=None
+        ):
             N = Ym.shape[0]
             res, loss, summary = self.net.lossWithResult(
                 X, Ym, 
@@ -111,7 +115,7 @@ class ToyNetTrainer(Trainer):
         trainWithDataset = Batched(trainInBatch)
 
         if self.cur_epoch == 0:
-            demo = next(iter(loader))[0][:2]
+            demo = first(loader)['X'][:2]
             self.board.add_graph(self.net, demo)
             del demo
 
@@ -189,7 +193,7 @@ class ToyNetTrainer(Trainer):
                 dcm.add(cy1, torch.ones_like(cy1))
             return Pm, Pb
         
-        loader = Fix3Loader(dataset, device=self.device, **self.dataloader['scoring'])
+        loader = FixLoader(dataset, device=self.device, **self.dataloader['scoring'])
         Pm, Pb = Batched(scoresInBatch)(loader)
 
         cmdic = {
@@ -213,7 +217,7 @@ class ToyNetTrainer(Trainer):
             # EMMM: but I don't know which image to sample, cuz if images are not fixed, 
             # we cannot compare through epochs... and also, since scoring is not testing, 
             # extracting (nearly) all mis-classified samples is excessive...
-            X = next(iter(loader))[0][:8].to(self.device)
+            X = first(loader)['X'][:8].to(self.device)
             M, B, mw, bw = self.net(X)
             wsum = lambda x, w: (x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)).sum(dim=1)
             heatmap = lambda x, w: 0.7 * X + 0.1 * gray2JET(wsum(x, w), thresh=0.)

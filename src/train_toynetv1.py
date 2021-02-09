@@ -5,7 +5,7 @@ from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
 
-ta, va = classSpecSplit(CachedDatasetGroup('./data/BIRADs/annotated.pt'), 8, 2)
+ta, va = classSpecSplit(CachedDatasetGroup('./data/BIRADs/ourset.pt'), 8, 2)
 print('trainset A distribution:', ta.distribution)
 # print('trainset U distribution:', tu.distribution)
 print('validation A distribution:', va.distribution)
