@@ -7,12 +7,9 @@ Dataset for BIRADs images & annotations. Supports multi-scale images.
 import os
 from abc import ABC, abstractclassmethod
 from collections import defaultdict
-from itertools import chain
-from random import randint
 
 import torch
 from torch.utils.data import ConcatDataset, Dataset, Subset, random_split
-
 from utils.indexserial import IndexLoader
 
 first = lambda it: next(iter(it))
@@ -39,13 +36,14 @@ class DistributedSubset(Distributed, Subset):
         Distributed.__init__(self, dataset.statTitle)
 
     def getDistribution(self, title):
-        return self.dataset.getDistribution(title)
+        K = len(self.meta['classname'][title])
+        return torch.LongTensor([len(self.argwhere(lambda l: l == i, title)) for i in range(K)])
 
     def argwhere(self, cond, title=None):
-        if title is None: ge = lambda i: self.__getitem__(i)
-        else: ge = lambda i: self.__getitem__(i)[title]
+        if title is None: ge = lambda i: i
+        else: ge = lambda i: i[title]
 
-        return [i for i in self.indices if cond(ge(i))]
+        return [i for i in self if cond(ge(i))]
 
     @property
     def meta(self): return self.dataset.meta
@@ -103,38 +101,17 @@ class CachedDataset(Distributed):
     @property
     def K(self): return [len(i) for i in self.meta['classname']]
 
-class AugmentSet(Distributed, ABC):
-    def __init__(self, dataset, aim_size=None):
-        self.dataset = dataset
-        self.length = aim_size - len(dataset)
-
-    def __len__(self): return self.length
-
-    def _sample(self): 
-        return self.dataset.__getitem__(randint(0, len(self.dataset)))
-
-    @abstractclassmethod
-    def deformation(self, item): pass
-
-    def __getitem__(self, i):
-        return self.deformation(self._sample())
-
-class ElasticAugmentSet(AugmentSet):
-    def deformation(self, item):
-        # item['X'] = 
-        raise NotImplementedError
-        return item
-
 class CachedDatasetGroup(DistributedConcatSet):
     '''
     Dataset for a group of cached datasets.
     '''
-    def __init__(self, path, augment=True):
+    def __init__(self, path):
         d = torch.load(path)
         shapedic: dict = d.pop('data')
-        idxs = d.pop('index')
+        idxs: list = d.pop('index')
         self.loader = IndexLoader(os.path.splitext(path)[0] + '.imgs', idxs)
         datasets = [CachedDataset(self.loader, shapedic[shape], d) for shape in shapedic]
+
         DistributedConcatSet.__init__(self, datasets, tag=shapedic.keys())
 
 def classSpecSplit(dataset: Distributed, t, v, distrib_title='Ym', tag=None):

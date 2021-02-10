@@ -14,7 +14,7 @@ from common.decorators import Batched, NoGrad
 from common.trainer import Trainer
 from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
 from utils.dict import shallow_update
-from dataloader import FixLoader
+from data.dataloader import FixLoader
 
 
 lenn = lambda x: len(x) if x else 0

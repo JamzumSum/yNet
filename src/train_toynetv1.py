@@ -1,18 +1,21 @@
 import os
 
-from dataset import classSpecSplit, CachedDatasetGroup
+from data.dataset import classSpecSplit, CachedDatasetGroup, DistributedConcatSet
+from data.augment import ElasticAugmentSet
 from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
 
-ta, va = classSpecSplit(CachedDatasetGroup('./data/BIRADs/ourset.pt'), 8, 2)
-print('trainset A distribution:', ta.distribution)
-# print('trainset U distribution:', tu.distribution)
-print('validation A distribution:', va.distribution)
-# print('validation U distribution:', vu.distribution)
+td, vd = classSpecSplit(CachedDatasetGroup('./data/BIRADs/ourset.pt'), 8, 2)
+td = DistributedConcatSet(
+    datasets=[td, ElasticAugmentSet(td, 'Ym', aim_size=440)], 
+    tag=['realset', 'elastic']
+)
+print('trainset A distribution:', td.distribution)
+print('validation A distribution:', vd.distribution)
 
 trainer = ToyNetTrainer(ToyNetV1, getConfig('./config/toynetv1.yml'))
-trainer.train(ta, vd=va)
+trainer.train(td, vd)
 
 post = trainer.paths.get('post_training', '')
 if post and os.path.exists(post):
