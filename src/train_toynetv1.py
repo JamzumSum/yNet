@@ -1,16 +1,18 @@
 import os
 
 from data.dataset import classSpecSplit, CachedDatasetGroup, DistributedConcatSet
-from data.augment import ElasticAugmentSet
+from data.augment import ElasticAugmentSet, augmentWith
 from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
 
-td, vd = classSpecSplit(CachedDatasetGroup('./data/BIRADs/ourset.pt'), 8, 2)
-td = DistributedConcatSet(
-    datasets=[td, ElasticAugmentSet(td, 'Ym', aim_size=440)], 
-    tag=['realset', 'elastic']
+td, vd = classSpecSplit(
+    DistributedConcatSet([
+        CachedDatasetGroup('./data/BIRADs/ourset.pt'), 
+        CachedDatasetGroup('./data/set3/set3.pt')
+    ], tag=['ourset', 'set3']), 8, 2
 )
+td = augmentWith(td, ElasticAugmentSet, 'Ym', 700)
 print('trainset A distribution:', td.distribution)
 print('validation A distribution:', vd.distribution)
 

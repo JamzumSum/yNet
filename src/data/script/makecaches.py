@@ -1,4 +1,4 @@
-import os
+import os, argparse
 from collections import defaultdict
 
 import cv2 as cv
@@ -10,41 +10,41 @@ from utils.indexserial import IndexDumper
 BIRAD_NAME = ['2', '3', '4a', '4b', '4c', '5']
 M_NAME = ['bengin', 'malignant']
 
-def FSCache(inpath, outpath, datasets, title, statTitle=[]):
+def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
     shapedic = defaultdict(lambda: {k: [] for k in title})
     statdic = {k: defaultdict(int) for k in statTitle}
+    assert datasets
 
-    bans = mans = None
-    with open(os.path.join(inpath, 'labels.yml')) as f: mans, bans = yaml.safe_load_all(f)
-    dumper = IndexDumper(os.path.join(outpath, 'ourset.imgs'))
+    dumper = IndexDumper(os.path.join(outpath, name + '.imgs'))
+    with open(os.path.join(inpath, 'labels.yml')) as f: 
+        mdic, bdic = yaml.safe_load_all(f)
 
     idxs = []
     for D in datasets:
         DD = os.path.join(inpath, D)
         pics = os.listdir(DD)
-        for i in pics:
-            DDP = os.path.join(DD, i)
+        for p in pics:
+            fname, _ = os.path.splitext(p)
+            DDP = os.path.join(DD, p)
             img = cv.imread(DDP, 0)
             dic = shapedic[img.shape]
 
             img = torch.from_numpy(img).unsqueeze(0)
             img = img / img.max()
             idxs.append(dumper.dump(img))
-            Yb = BIRAD_NAME.index(bans[i[:-4]])
 
-            append_data = lambda t, d: (t in dic) and dic[t].append(d)
-            append_data('X', len(idxs) - 1)
-            append_data('Ym', mans[i[:-4]])
-            append_data('Yb', Yb)
+            if 'X' in dic: dic['X'].append(len(idxs) - 1)
+            if 'Ym' in dic: dic['Ym'].append(mdic[fname])
+            if 'Yb' in dic: dic['Yb'].append(BIRAD_NAME.index(bdic[fname]))
 
     for dic in shapedic.values():
         for t in ['Ym', 'Yb']:
             if t in dic:
                 if t in statdic:
-                    for i in dic[t]: statdic[t][i] += 1
+                    for p in dic[t]: statdic[t][p] += 1
                 dic[t] = torch.LongTensor(dic[t])
     for k, v in statdic.items():
-        statdic[k] = torch.LongTensor([v[i] for i in range(max(v.keys()) + 1)])
+        statdic[k] = torch.LongTensor([v[p] for p in range(max(v) + 1)])
                 
     torch.save(
         {
@@ -58,48 +58,30 @@ def FSCache(inpath, outpath, datasets, title, statTitle=[]):
             }, 
             'distribution': statdic
         }, 
-        os.path.join(outpath, 'ourset.pt')
-    )
-    return shapedic
-
-def WSCache(inpath, outpath):
-    DD = os.path.join(inpath, 'XPB')
-    mans = None
-    with open(os.path.join(inpath, 'labels.yml')) as f: mans, _ = yaml.safe_load_all(f)
-
-    shapedic = defaultdict(list)
-    for i in os.listdir(DD):
-        img = cv.imread(os.path.join(DD, i), 0)
-        img = torch.from_numpy(cv.equalizeHist(img))
-        shapedic[img.shape].append((
-            img, mans[i[:-4]]
-        ))
-
-    for k, v in shapedic.items():
-        s = sorted(v, key=lambda t: t[1])
-        X, Ym = ([t[i] for t in s] for i in range(2))
-        X = torch.stack(X).unsqueeze_(1)
-        Ym = torch.LongTensor(Ym)
-        shapedic[k] = (X, Ym)
-    
-    torch.save(
-        {
-            'data': shapedic, 
-            'classname': [
-                ['bengin', 'malignant'], 
-            ]
-        }, 
-        os.path.join(outpath, 'unannotated.pt')
+        os.path.join(outpath, name + '.pt')
     )
     return shapedic
 
 if __name__ == "__main__":
-    dic = FSCache(
-        inpath='./data/BIRADs/crafted', 
-        outpath='./data/BIRADs', 
-        datasets=['B', 'case'], 
-        title=['X', 'Ym', 'Yb'], 
-        statTitle=['Ym', 'Yb']
+    psr = argparse.ArgumentParser()
+    psr.add_argument('folder', type=str)
+    psr.add_argument('--name', type=str)
+    psr.add_argument('--sets', nargs='+', type=str)
+    psr.add_argument('--title', nargs='+', type=str)
+    psr.add_argument('--stat', nargs='+', type=str)
+    arg = psr.parse_args()
+
+    inpath = './data/%s/crafted' % arg.folder
+    outpath = './data/%s' % arg.folder
+    if arg.sets:
+        datasets = arg.sets
+    else:
+        datasets = [i for i in os.listdir(inpath) if os.path.isdir(os.path.join(inpath, i))]
+
+    dic = makecache(
+        inpath, outpath, arg.name if arg.name else arg.folder, datasets, 
+        title=['X'] + arg.title,
+        statTitle=arg.stat
     )
     for k, v in dic.items():
         print(k, len(v['X']), 'items cached')

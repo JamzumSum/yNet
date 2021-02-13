@@ -2,11 +2,11 @@ import cv2 as cv
 import numpy as np
 import os
 import yaml
+import argparse
 
-D = './data/BIRADs/crafted'
 
-def CentralCrop(dataset):
-    DD = os.path.join(D, dataset)
+def CentralCrop(inpath, dataset):
+    DD = os.path.join(inpath, dataset)
     pics = os.listdir(DD)
     for i in pics:
         DDP = os.path.join(DD, i)
@@ -32,6 +32,17 @@ def resizeWithCluster(path):
             print(k, img.shape, '->', rimg.shape)
 
 if __name__ == "__main__":
-    for i in ['B', 'case']:
-        CentralCrop(i)
+    psr = argparse.ArgumentParser()
+    psr.add_argument('folder', type=str)
+    psr.add_argument('--sets', nargs='+', type=str)
+    arg = psr.parse_args()
+
+    inpath = './data/%s/crafted' % arg.folder
+    if arg.sets:
+        datasets = arg.sets
+    else:
+        datasets = [i for i in os.listdir(inpath) if os.path.isdir(i)]
+
+    for i in datasets:
+        CentralCrop(inpath, i)
     # resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')

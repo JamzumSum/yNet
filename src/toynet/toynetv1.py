@@ -145,6 +145,9 @@ class ToyNetV1(nn.Module):
         Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
         return Mhead, Bhead, Pm, Pb
 
+    # for high pressure of memory, quiz will be deperated.
+    # Penalties roll back to mse.
+    # I'm seeking ways to implement this as an augment method.
     def quiz(self, X, M, B):
         '''
         A quiz to constrain network:
@@ -170,11 +173,12 @@ class ToyNetV1(nn.Module):
         # But may constrain on their own values, if necessary
 
         Mloss = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=mweight)
-        Mpenalty, Bpenalty = self.quiz(X, M, B)
+        Mpenalty = (M ** 2).mean()
         zipM = (Mloss, Mpenalty)
 
         if Yb is None: zipB = None
         else:
+            Bpenalty = (B ** 2).mean()
             Bloss = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=bweight)
             zipB = (Bloss, Bpenalty)
 
@@ -196,7 +200,7 @@ class ToyNetV1(nn.Module):
             penalty = penalty + Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
             summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return res, loss + penalty, summary
+        return res, loss + penalty / 32, summary
 
     def loss(self, *args, **argv):
         '''

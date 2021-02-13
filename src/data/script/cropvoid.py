@@ -5,7 +5,7 @@ import cv2 as cv
 import numpy as np
 import yaml
 
-clearDir = lambda d: rmtree(d, ignore_errors=True) or os.mkdir(d)
+clearDir = lambda d: rmtree(d, ignore_errors=True) or os.makedirs(d, exist_ok=True)
 
 def check_annotation(path):
     DD = os.path.join(path, 'B')

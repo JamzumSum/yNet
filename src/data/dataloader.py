@@ -6,10 +6,36 @@ import torch
 from torch.utils.data import (ConcatDataset, DataLoader, Sampler,
                               SequentialSampler, RandomSampler)
 
+merge_list = lambda l: sum(l, [])
+
+class CumulativeRandomSampler(RandomSampler):
+    def __init__(self, add, *args, **kwargs):
+        self.a = add
+        RandomSampler.__init__(self, *args, **kwargs)
+    def __iter__(self):
+        return (self.a + i for i in RandomSampler.__iter__(self))
 
 class ChainSubsetRandomSampler(Sampler[int]):
+
     def __init__(self, dataset: ConcatDataset):
-        self.sampler = [RandomSampler(i) for i in dataset.datasets]
+        self.sampler = self.getSamplers(dataset)
+
+    @staticmethod
+    def getSamplers(dataset, start=0):
+        meta: dict = dataset.meta
+        if not all(isinstance(i, dict) for i in meta.values()) or len(meta) == 1:
+            return [CumulativeRandomSampler(start, dataset)]
+
+        hashf = lambda m: hash((m['shape'], 'Yb' in m['title']))
+        # dataset: ConcatDataset
+        if len(set(hashf(i) for i in meta.values())) == 1:
+            return [CumulativeRandomSampler(start, dataset)]
+        indices = dataset.cumulative_sizes[:-1]
+        indices.insert(0, 0)
+        return merge_list([
+            ChainSubsetRandomSampler.getSamplers(D, s + start) \
+            for s, D in zip(indices, dataset.datasets)
+        ])
 
     def __iter__(self):
         shuffle_(self.sampler)
@@ -19,8 +45,8 @@ class ChainSubsetRandomSampler(Sampler[int]):
         return sum(len(i) for i in self.sampler)
 
 class FixLoader(DataLoader):
-    title = ('X', 'Ym', 'Yb'
-    )
+    title = ('X', 'Ym', 'Yb')
+
     def __init__(self, dataset: ConcatDataset, batch_size=1, shuffle=False, device=None, **otherconf):
         DataLoader.__init__(
             self, dataset, batch_size, **otherconf,
@@ -48,10 +74,9 @@ class FixLoader(DataLoader):
         N = len(x)
         hashf = lambda i: hash((i['X'].shape, 'Yb' in i, ))
 
-        hashstat = defaultdict(int)
-        for i in x: hashstat[hashf(i)] += 1
-        mode = max(hashstat.items(), key=lambda i: i[1])[0]
-        x = [i for i in x if hashf(i) == mode]
+        hashstat = defaultdict(list)
+        for i in x: hashstat[hashf(i)].append(i)
+        x = max(hashstat.values(), key=len)
 
         if self.drop_last:
             x = self.augmentFromBatch(x, N)
