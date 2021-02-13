@@ -66,7 +66,7 @@ class Trainer:
             'best_mark': score if score else self.best_mark
         }
 
-        if not os.path.exists(self.model_dir): os.mkdir(self.model_dir)
+        os.makedirs(self.model_dir, exist_ok=True)
         torch.save(
             (self.net.state_dict(), self.conf, vconf, score), 
             os.path.join(self.model_dir, name + '.pt')
@@ -79,7 +79,7 @@ class Trainer:
             print('%s not exist. Start new training.' % path)
             return
 
-        state, newconf, vonf, score = self.torch.load(path)
+        state, newconf, vonf, score = torch.load(path)
 
         print(score)
         self.net.load_state_dict(state)

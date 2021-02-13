@@ -8,16 +8,16 @@ from utils.utils import getConfig
 
 td, vd = classSpecSplit(
     DistributedConcatSet([
-        CachedDatasetGroup('./data/BIRADs/ourset.pt'), 
+        CachedDatasetGroup('./data/set2/set2.pt'), 
         CachedDatasetGroup('./data/set3/set3.pt')
-    ], tag=['ourset', 'set3']), 8, 2
+    ], tag=['set2', 'set3']), 8, 2
 )
-td = augmentWith(td, ElasticAugmentSet, 'Ym', 640)
-print('trainset A distribution:', td.distribution)
-print('validation A distribution:', vd.distribution)
+tda = augmentWith(td, ElasticAugmentSet, 'Ym', 480)
+print('trainset distribution:', td.distribution)
+print('validation distribution:', vd.distribution)
 
 trainer = ToyNetTrainer(ToyNetV1, getConfig('./config/toynetv1.yml'))
-trainer.train(td, vd)
+trainer.train(tda, vd, no_aug=td)
 
 post = trainer.paths.get('post_training', '')
 if post and os.path.exists(post):

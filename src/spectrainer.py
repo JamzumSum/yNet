@@ -54,15 +54,15 @@ class ToyNetTrainer(Trainer):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **shallow_update(self.sg_conf, sg_arg, True))
         return optimizer, scheduler
 
-    def train(self, td, vd):
+    def train(self, td, vd, no_aug=None):
         # get all loaders
         # cache all distributions, for they are constants
         normalize1 = lambda x: x / x.sum()
         loader = FixLoader(td, device=self.device, **self.dataloader['training'])
-        tMdistrib = normalize1(1 / td.getDistribution('Ym')).to(self.device)
-        tBdistrib = normalize1(1 / td.getDistribution('Yb')).to(self.device)
         vloader = FixLoader(vd, device=self.device, batch_size=loader.batch_size)
-        vMdistrib = normalize1(1 / vd.getDistribution('Ym')).to(self.device)
+        if no_aug is None: no_aug = td
+        mweight = torch.Tensor([.4, .6])
+        tBdistrib = normalize1(1 / no_aug.getDistribution('Yb')).to(self.device)
         vBdistrib = normalize1(1 / vd.getDistribution('Yb')).to(self.device)
 
         unanno_only_epoch = self.training.get('use_annotation_from', self.max_epoch)
@@ -128,7 +128,7 @@ class ToyNetTrainer(Trainer):
             self.net.train()
             bar = Bar('epoch T%03d' % self.cur_epoch, max=(lenn(td) << int(self.adversarial)))
             res = trainWithDataset(
-                loader, ops = ops, name='ourset', mweight=tMdistrib, bweight=tBdistrib
+                loader, ops = ops, name='ourset', mweight=mweight, bweight=tBdistrib
             )
             bar.finish()
             if self.adversarial: 
@@ -138,7 +138,7 @@ class ToyNetTrainer(Trainer):
             tll = tll.mean()
             
             bar = Bar('epoch V%03d' % self.cur_epoch, max=lenn(vd))
-            vll = trainWithDataset(vloader, mweight=vMdistrib, bweight=vBdistrib)
+            vll = trainWithDataset(vloader, mweight=mweight, bweight=vBdistrib)
             vll = torch.cat(vll).mean()
             bar.finish()
             ll = (tll + vll) / 2
@@ -150,7 +150,7 @@ class ToyNetTrainer(Trainer):
                 if msg: msg.step(ll)
                 if bsg: bsg.step(ll)
 
-            merr, _ = self.score('ourset/trainset', td)          # trainset score
+            merr, _ = self.score('ourset/trainset', no_aug)          # trainset score
             merr, _ = self.score('ourset/validation', vd)        # validation score
             self.traceNetwork()
             

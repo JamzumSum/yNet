@@ -21,7 +21,7 @@ class Resx2(torch.nn.Module):
     def seperatedParameters(self):
         return self.mbranch.parameters(), self.bbranch.parameters()
 
-    def loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None, *args, **argv):
+    def lossWithResult(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None, *args, **argv):
         Pm, Pb = self.forward(X)
         Mloss = F.cross_entropy(Pm, Ym, weight=mweight)    # use [N, 2] to cal. CE
         summary = {
@@ -31,4 +31,4 @@ class Resx2(torch.nn.Module):
         else:
             Bloss = F.cross_entropy(Pb, Yb, weight=bweight)
             summary['loss/BIRADs CE'] = Bloss.detach()
-        return Mloss + self.a * Bloss, summary
+        return (Pm, Pb), Mloss + self.a * Bloss, summary
