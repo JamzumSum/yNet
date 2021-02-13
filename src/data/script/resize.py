@@ -41,8 +41,8 @@ if __name__ == "__main__":
     if arg.sets:
         datasets = arg.sets
     else:
-        datasets = [i for i in os.listdir(inpath) if os.path.isdir(i)]
-
+        datasets = [i for i in os.listdir(inpath) if os.path.isdir(os.path.join(inpath, i))]
+    
     for i in datasets:
         CentralCrop(inpath, i)
     # resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')

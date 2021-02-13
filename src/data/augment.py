@@ -24,7 +24,7 @@ class AugmentSet(VirtualDataset, ABC):
         Distributed.__init__(self, dataset.statTitle)
 
         if aim_size is None:
-            avg = self.dataset.distribution().max().item()
+            avg = self.dataset.distribution.max().item()
         else:
             avg = aim_size // self.K
 

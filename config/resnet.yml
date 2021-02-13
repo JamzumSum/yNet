@@ -1,33 +1,54 @@
-model:      # model constructor
-  model: resnet34   # resnet18, resnet34, resnet50, resnet101, resnet152
+model:
+  # resnet18, resnet34, resnet50, resnet101, resnet152
+  model: 
+    - resnet18
+    - resnet50  
   K: 6     # 2, 3, 4a, 4b, 4c, 5
-training:  # training strategy
+
+# training strategy
+training:  
   device: cuda:0
   continue: False
   load_from: latest
   max_epoch: 80
-  use_annotation_from: 0  # epoch
+  use_annotation_from: 30
+
 optimizer:
   - Adam
-  - lr: 0.0005
+  - lr: 5.0e-4
+
 scheduler:
-  factor: 0.8
+  factor: 0.2
   patience: 2
   verbose: True
-  cooldown: 3
+  cooldown: 8
+
 branch:
   default:
     scheduler: null
+    optimizer:
+      - Adam
+      - lr: 1.e-3
+        weight_decay: 1.0e-3
+  M: 
+    optimizer:
+      - Adam
+      - lr: 5.0e-8
+        weight_decay: 1.0e-3
+  discriminator:
+    scheduler:
+      factor: 0.1
+      patience: 10
+      cooldown: 0
+
 dataloader:
-  annotated:
-    batch_size: 11
-    shuffle: True
-    drop_last: True
-  unannotated:
-    batch_size: 11
+  training:
+    batch_size: 16
     shuffle: True
   scoring:
-    batch_size: 11
+    batch_size: 16
+    
 paths:
-  model_dir: model/resnet34/test
-  log_dir: log/resnet34/{date}
+  model_dir: model/resnet/resnet50
+  log_dir: log/resnet/{date}
+  post_training: src/post_training.py

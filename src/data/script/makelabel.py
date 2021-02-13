@@ -39,7 +39,7 @@ def malignant_label(folder_label: dict):
 if __name__ == "__main__":
     psr = argparse.ArgumentParser()
     psr.add_argument('folder', type=str)
-    psr.add_argument('--sets', nargs='+', type=lambda s: s.split(':'), default=[('malignant', 1), ('bengin', 0)])
+    psr.add_argument('--sets', nargs='+', type=lambda s: s.split(':'), default=[('malignant', 1), ('benign', 0)])
     psr.add_argument('--title', nargs='+', type=str)
     arg = psr.parse_args()
 

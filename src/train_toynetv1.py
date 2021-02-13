@@ -12,7 +12,7 @@ td, vd = classSpecSplit(
         CachedDatasetGroup('./data/set3/set3.pt')
     ], tag=['ourset', 'set3']), 8, 2
 )
-td = augmentWith(td, ElasticAugmentSet, 'Ym', 700)
+td = augmentWith(td, ElasticAugmentSet, 'Ym', 640)
 print('trainset A distribution:', td.distribution)
 print('validation A distribution:', vd.distribution)
 

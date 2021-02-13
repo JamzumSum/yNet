@@ -1,18 +1,29 @@
-import torch
-import yaml
+import os
 
-
-from dataloader import trainValidSplit
+from data.dataset import classSpecSplit, CachedDatasetGroup, DistributedConcatSet
+from data.augment import ElasticAugmentSet, augmentWith
 from spectrainer import ToyNetTrainer
+from baseline.resnet import Resx2
+from utils.utils import getConfig
 
 if __name__ == "__main__":
-    (ta, tu), (va, vu) = trainValidSplit(8, 2)
-    print('annotated train set:', len(ta))
-    print('unannotated train set:', len(tu))
-    print('annotated validation set:', len(va))
-    print('unannotated validation set:', len(vu))
+    td, vd = classSpecSplit(
+        DistributedConcatSet([
+            CachedDatasetGroup('./data/set2/set2.pt'), 
+            CachedDatasetGroup('./data/set3/set3.pt')
+        ], tag=['set2', 'set3']), 8, 2
+    )
+    # td = augmentWith(td, ElasticAugmentSet, 'Ym', 640)
+    print('trainset distribution:', td.distribution)
+    print('validation distribution:', vd.distribution)
 
-    conf = {}
-    with open('./config/resnet50.yml') as f: conf = yaml.safe_load(f)
-    trainer = ToyNetTrainer(Resx2, conf)
-    trainer.train(ta, tu, va, vu)
+    trainer = ToyNetTrainer(Resx2, getConfig('./config/resnet.yml'))
+    trainer.train(td, vd)
+
+    post = trainer.paths.get('post_training', '')
+    if post and os.path.exists(post):
+        with open(post) as f:
+            # use exec here since
+            # 1. `import` will excute the script at once
+            # 2. you can modify the script when training
+            exec(compile(f.read(), post, exec))
