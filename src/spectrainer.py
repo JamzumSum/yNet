@@ -68,7 +68,7 @@ class ToyNetTrainer(Trainer):
         res, loss, summary = self.net.lossWithResult(
             X, Ym, 
             None if self.cur_epoch < self.discardYbEpoch else Yb, 
-            self.piter
+            mask, self.piter
         )
         if name:
             self.total_batch += 1
@@ -110,13 +110,13 @@ class ToyNetTrainer(Trainer):
             print('Warning: You are using CPU for training. Be careful of its temperature...')
         else:
             torch.cuda.reset_peak_memory_stats()
-            
+        
         trainWithDataset = Batched(self.trainInBatch)
 
-        if self.cur_epoch == 0:
-            demo = first(loader)['X'][:2]
-            self.board.add_graph(self.net, demo)
-            del demo
+        # if self.cur_epoch == 0:
+        #     demo = first(loader)['X'][:2]
+        #     self.board.add_graph(self.net, demo)
+        #     del demo
 
         ops = (gop, )
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
@@ -127,7 +127,7 @@ class ToyNetTrainer(Trainer):
             self.net.train()
             bar = Bar('epoch T%03d' % self.cur_epoch, max=(lenn(td) << int(self.adversarial)))
             res = trainWithDataset(
-                loader, ops = ops, name='ourset', bar=Bar, dop=dop
+                loader, ops = ops, name='ourset', bar=bar, dop=dop
             )
             bar.finish()
             if self.adversarial: 

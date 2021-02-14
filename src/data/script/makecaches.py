@@ -29,6 +29,7 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
             fname, _ = os.path.splitext(p)
             img = cv.imread(DDP, 0)
             if img is None: raise ValueError(DDP)
+            assert not np.any(np.isnan(img)), DDP
             dic = shapedic[img.shape]
 
             img = torch.from_numpy(img).unsqueeze(0)
@@ -41,8 +42,10 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
             if 'mask' in dic: 
                 for p in maskdic[fname]: 
                     img = cv.imread(p, 0)
+                    assert not np.any(np.isnan(img)), p
                     img = torch.from_numpy(img).unsqueeze(0)
-                    img = img / img.max()
+                    if torch.any(img > 0): img = img / img.max()
+                    else: img = img.type(torch.float)
                     idxs.append(dumper.dump(img))
                     dic['mask'].append(len(idxs) - 1)
 

@@ -3,6 +3,7 @@ from unittest import TestCase
 import torch
 import torch.nn.functional as F
 from common.loss import focalBCE
+from toynet.toynetv1 import ToyNetV1
 
 class FocalTest(TestCase):
     K = 6
@@ -46,3 +47,23 @@ class FocalTest(TestCase):
         print(P)
         self.assertTrue(torch.all(P[:, 0] > .2))
         self.assertTrue(torch.all(P[:, 1] < .8))
+
+class TripletTest(TestCase):
+    def testAPN(self):
+        c = torch.Tensor([
+            [.2, .8, .9],
+            [.21, .8, .89],
+            [.22, .81, .91],
+            [.3, .7, .8],
+            [.4, .6, .65],
+            [.9, .1, .2],
+            [.91, .11, .21],
+            [.92, .09, .19],
+        ])
+        Y = torch.LongTensor([0, 0, 0, 0, 1, 1, 1, 1])
+        a, p, n = ToyNetV1.apn(c, Y, 2)
+        self.assertTrue(torch.all(a == c[4]))
+        self.assertTrue(torch.all(p == c[7]))
+        self.assertTrue(torch.all(n == c[3]))
+        loss = F.triplet_margin_loss(a, p, n, 1)
+        print(loss)

@@ -139,19 +139,19 @@ class UNetWOHeader(nn.Module):
 class UNet(UNetWOHeader):
     def __init__(self, oc, headers=[], *args, softmax=False, **kwargs):
         UNetWOHeader.__init__(self, *args, **kwargs)
-        headers = [nn.Conv2d(self.fc, oc, 1)]
-        headers.extend(
+        self.headers = [nn.Conv2d(self.fc, oc, 1)]
+        self.headers.extend(
             nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1)) for oc in headers
         )
-        self.headers = headers
+        for i, f in enumerate(self.headers): self.add_module("header %d" % (i + 1), f)
         self.sigma = nn.Softmax(1) if softmax else nn.Sigmoid()
 
     def forward(self, X, expand=True):
         bottomx, finalx = UNetWOHeader.forward(self, X, expand)
-        if not expand: return bottomx, *(None for f in self.headers)
+        if not expand: return (bottomx, *(None for f in self.headers))
 
         act = (self.sigma(f(finalx)) for f in self.headers)
-        return bottomx, *act
+        return (bottomx, *act)
 
 if __name__ == "__main__":
     unet = UNet(3, 1, 16)

@@ -11,7 +11,7 @@ td, vd = classSpecSplit(
         CachedDatasetGroup('./data/set2/set2.pt'), 
         CachedDatasetGroup('./data/set3/set3.pt'),
         CachedDatasetGroup('./data/BUSI/BUSI.pt')
-    ], tag=['set2', 'set3']), 8, 2
+    ], tag=['set2', 'set3', 'BUSI']), 8, 2
 )
 print('trainset distribution:', td.distribution)
 print('validation distribution:', vd.distribution)
