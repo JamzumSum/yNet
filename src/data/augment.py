@@ -73,7 +73,7 @@ class ElasticAugmentSet(AugmentSet):
     '''
     def __init__(
         self, dataset: Distributed, distrib_title: str, aim_size=None, 
-        kernel=21, sigma=4, alpha=34
+        sigma=4, alpha=34
     ):
         """
         - kernel: size of gaussian kernel. int or tuple/list
@@ -82,28 +82,30 @@ class ElasticAugmentSet(AugmentSet):
         """
         AugmentSet.__init__(self, dataset, distrib_title, aim_size)
         self.alpha = alpha
-        if isinstance(kernel, int): kernel = (kernel, kernel)
-        assert kernel[0] & 1, "kernel must be odd"
-        assert kernel[1] & 1, "kernel must be odd"
-
-        self.filter = torch.nn.Conv2d(1, 1, kernel, padding=(kernel[0] // 2, kernel[1] // 2), bias=False)
-        self.filter.forward = NoGrad(self.filter.forward)
-        kernel = getGaussianKernel(kernel[0], sigma) @ getGaussianKernel(kernel[1], sigma).T
-        kernel = torch.from_numpy(kernel).type_as(self.filter.weight)
-        kernel = unsqueeze_as(kernel, self.filter.weight, 0)
-        with torch.no_grad():
-            self.filter.weight = torch.nn.Parameter(kernel, requires_grad=False)
+        self.filter = self.getFilter(sigma)
 
     def deformation(self, item):
-        item['X'] = self.elastic(item['X'])
+        item['X'] = self.elastic(item['X'], self.filter, self.alpha)
         return item
 
-    def elastic(self, X):
+    @staticmethod
+    def getFilter(sigma):
+        padding = int(4 * sigma + 0.5)
+        kernel = 2 * padding + 1
+        kernel = getGaussianKernel(kernel, sigma).astype('float32')
+        kernel = kernel @ kernel.T
+        kernel = torch.from_numpy(kernel)
+        kernel = kernel.unsqueeze_(0).unsqueeze_(0)
+        return lambda x: F.conv2d(x, kernel, bias=None, padding=padding)
+        
+    @staticmethod
+    def elastic(X, gaussian_filter, alpha=34):
         '''
         X: [C, H, W]
         '''
         X = X.unsqueeze(0)
         H, W = X.shape[-2:]
+
         uniform = torch.distributions.Uniform(-1, 1)
         dx = uniform.sample(X.shape[-2:])
         dy = uniform.sample(X.shape[-2:])
@@ -111,8 +113,8 @@ class ElasticAugmentSet(AugmentSet):
         xgrid = torch.arange(W).repeat(H, 1)
         ygrid = torch.arange(H).repeat(W, 1).T
         with torch.no_grad():
-            dx = self.alpha * self.filter(unsqueeze_as(dx, X, 0))
-            dy = self.alpha * self.filter(unsqueeze_as(dy, X, 0))
+            dx = alpha * gaussian_filter(unsqueeze_as(dx, X, 0))
+            dy = alpha * gaussian_filter(unsqueeze_as(dy, X, 0))
         H /= 2; W /= 2
         dx = (dx + xgrid - W) / W
         dy = (dy + ygrid - H) / H

@@ -5,147 +5,55 @@ A toy implement for classifying benign/malignant and BIRADs
 * create: 2021-1-11
 '''
 from itertools import chain
-from math import log as mathlog
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 from common.loss import F, focalBCE
-from common.utils import freeze
 
 from .discriminator import WithCD
 from .unet import UNet
 
-assert hasattr(torch, 'amax')   # make sure amax is supported
-
-class SEBlock(nn.Sequential):
-    def __init__(self, L, hs=128):
-        nn.Sequential.__init__(
-            self, 
-            nn.Linear(L, hs), 
-            nn.ReLU(), 
-            nn.Linear(hs, L), 
-            nn.Softmax(dim=-1)        
-            # use softmax instead of sigmoid here since the attention-ed channels are sumed, 
-            # while the sum might be greater than 1 if sum of the attention vector is not restricted.
-        )
-        nn.init.constant_(self[2].bias, 1 / L)
-
-    def forward(self, X):
-        '''
-        X: [N, K, H, W, L]
-        O: [N, K, H, W]
-        '''
-        X = X.permute(4, 0, 1, 2, 3)            # [L, N, K, H, W]
-        Xp = F.adaptive_avg_pool2d(X, (1, 1))   # [L, N, K, 1, 1]
-        Xp = Xp.permute(1, 2, 3, 4, 0)          # [N, K, 1, 1, L]
-        Xp = nn.Sequential.forward(self, Xp).permute(4, 0, 1, 2, 3)    # [L, N, K, 1, 1]
-        return (X * Xp).sum(dim=0)
-
-class PyramidPooling(nn.Module):
-    '''
-    Use pyramid pooling instead of max-pooling to make sure more elements in CAM can be backward. 
-    Otherwise only the patch with maximum average confidence has grad while patches and small.
-    Moreover, the size of patches are fixed so is hard to select. Multi-scaled patches are suitable.
-    '''
-    def __init__(self, patch_sizes, hs=128):
-        nn.Module.__init__(self)
-        if any(i & 1 for i in patch_sizes):
-            print('''Warning: At least one value in `patch_sizes` is odd. 
-            Channel-wise align may behave incorrectly.''')
-        self.patch_sizes = sorted(patch_sizes)
-        self.atn = SEBlock(self.L, hs)
-    @property
-    def L(self): return len(self.patch_sizes)
-
-    def forward(self, X):
-        '''
-        X: [N, C, H, W]
-        O: [N, K, 2 * H//P_0 -1, 2 * W//P_0 - 1]
-        '''
-        # set stride as P/2, so that patches overlaps each other
-        # hopes to counterbalance the lack-representating of edge pixels of a patch.
-        ls = [F.avg_pool2d(X, patch_size, patch_size // 2) for patch_size in self.patch_sizes]
-        base = ls.pop(0)    # [N, K, H//P0, W//P0]
-        ls = [F.interpolate(i, base.shape[-2:], mode='nearest') for i in ls]
-        ls.insert(0, base)
-        ls = torch.stack(ls, dim=-1)    # [N, K, H//P0, W//P0, L]
-        return self.atn(ls)
-
-class BIRADsUNet(UNet):
+class BIRADsUNet(nn.Module):
     '''
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     '''
     def __init__(self, ic, K, fc=64, pi=.5, memory_trade=False):
-        UNet.__init__(self, ic, oc=2, fc=fc, memory_trade=memory_trade)
+        self.unet = UNet(
+            ic=ic, oc=1, fc=fc,
+            inner_res=True, memory_trade=memory_trade
+        )
         self.memory_trade = memory_trade
-        # Set out_class=2 since we have two classes: malignant and bengin
-        # Note that thought B/M are exclusive, but P(M) + P(B) != 1, 
-        # for there might be inputs that contain no tumor. 
-        # But for similarity we may restrict that P(M) + P(B) = 1...
-        # So softmax is accepted...
-        self.BDW = nn.Conv2d(fc, K, 1)
-        if pi: self.initLastConvBias(pi)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.mfc = nn.Linear(self.unet.fc * 2 ^ self.unet.level, 2)
+        self.bfc = nn.Linear(self.unet.fc * 2 ^ self.unet.level, K)
 
-    def forward(self, X):
+    def forward(self, X, segment=True):
         '''
         X: [N, ic, H, W]
         return: 
-        - B/M Class Activation Mapping  [N, 2, H, W]
-        - BIRADs CAM                    [N, K, H, W]
+        - segment map           [N, 2, H, W]
+        - x: bottom of unet feature. [N, fc * 2^level]
+        - Pm        [N, 2]
+        - Pb        [N, K]
         '''
-        x9, Mhead = UNet.forward(self, X)
-        Bhead = torch.sigmoid(self.BDW(torch.tanh(x9)))
-        return Mhead, Bhead
-
-    def initLastConvBias(self, pi):
-        '''
-        Initial strategy from RetinaNet. Hopes to stablize the training.
-        NOTE: fore ground(tumors) are not as rare as that in RetinaNet's settings.
-            So set pi as 0.01 might be maladaptive...
-        '''
-        b = mathlog(pi / (1 - pi))
-        # nn.init.constant_(self.DW.bias, b)
-        nn.init.constant_(self.BDW.bias, b)
+        c, segment = self.unet(X, segment)
+        x = self.pool(c).view(c.shape[:2])    # [N, fc * 2^level]
+        Pm = self.mfc(x)    # [N, 2]
+        Pb = self.bfc(x)    # [N, K]
+        return segment, x, Pm, Pb
 
     def seperatedParameters(self):
         paramAll = self.parameters()
-        paramB = self.BDW.parameters()
+        paramB = self.bfc.parameters()
         paramM = (p for p in paramAll if id(p) not in [id(i) for i in paramB])
         return paramM, paramB
 
-class ToyNetV1(nn.Module):
-    support = ('hotmap', )
+class ToyNetV1(BIRADsUNet):
+    support = ('segment', )
+    mweight = torch.Tensor([.4, .6])
+    bweight = torch.Tensor([.1, .2, .2, .2, .2, .1])
 
-    def __init__(self, in_channel, K, patch_sizes, fc=64, pi=0.01, memory_trade=False):
-        nn.Module.__init__(self)
-        self.K = K
-        self.backbone = BIRADsUNet(in_channel, K, fc, pi, memory_trade)
-        self.pooling = PyramidPooling(patch_sizes)
-        self.memory_trade = memory_trade
-
-    def seperatedParameters(self):
-        m, b = self.backbone.seperatedParameters()
-        return chain(m, self.pooling.parameters()), b
-
-    def forward(self, X, memory_trade=False):
-        '''
-        X: [N, ic, H, W]
-        return: 
-        - B/M Class Activation Mapping  [N, 2, H, W]
-        - BIRADs CAM                    [N, H, W, K]
-        - B/M prediction distrib.       [N, 2]
-        - BIRADs prediction distrib.    [N, K]
-        '''
-        Mhead, Bhead = self.backbone(X)
-        Mpatches = self.pooling(Mhead)      # [N, 2, 2*H//P-1, 2*W//P-1]
-        Bpatches = self.pooling(Bhead)      # [N, K, 2*H//P-1, 2*W//P-1]
-
-        Pm = torch.amax(Mpatches, dim=(2, 3))        # [N, 2]
-        Pb = torch.amax(Bpatches, dim=(2, 3))        # [N, K]
-        return Mhead, Bhead, Pm, Pb
-
-    # for high pressure of memory, quiz will be deperated.
+    # for high pressure of memory, quiz is deperated.
     # Penalties roll back to mse.
     # I'm seeking ways to implement this as an augment method.
     def quiz(self, X, M, B):
@@ -162,45 +70,43 @@ class ToyNetV1(nn.Module):
         Bqloss = F.mse_loss(fPB, PB)
         return Mqloss, Bqloss
 
-    def _loss(self, X, Ym, Yb=None, piter=0., mweight=None, bweight=None):
+    def _loss(self, X, Ym, Yb=None, mask=None, piter=0.):
         '''
         Protected for classes inherit from ToyNetV1.
         return: Original result, M-branch losses, B-branch losses.
         '''
-        res = self.forward(X, self.memory_trade)
-        M, B, Pm, Pb = res
+        res = self.forward(X, mask is not None)
+        seg, c, Pm, Pb = res
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
+        loss = {}
+        loss['pm'] = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=self.mweight)
 
-        Mloss = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=mweight)
-        Mpenalty = (M ** 2).mean()
-        zipM = (Mloss, Mpenalty)
+        if seg is not None:
+            # TODO: maybe a weighted mse?
+            loss['seg'] = F.mse_loss(seg, mask)
 
-        if Yb is None: zipB = None
-        else:
-            Bpenalty = (B ** 2).mean()
-            Bloss = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=bweight)
-            zipB = (Bloss, Bpenalty)
+        if Yb is not None: 
+            loss['pb'] = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=self.bweight)
 
-        return res, zipM, zipB, None
+        # TODO: apply triplet loss on c
+        # loss['tri'] = F.triplet_margin_loss(*self.apn(c), margin=r)
+        return res, loss
 
     def lossWithResult(self, *args, **argv):
-        res = self._loss(*args, **argv)
-        zipM, zipB = res[1:3]
-        Mloss, Mpenalty = zipM
+        res, loss = self._loss(*args, **argv)
+        Mloss = loss['pm']
+        Sloss = loss['seg']
         summary = {
             'loss/malignant focal': Mloss.detach(), 
-            'penalty/CAM_malignant': Mpenalty.detach()
+            'loss/segment mse': Sloss.detach()
         }
-        loss = Mloss
-        penalty = Mpenalty
-        if zipB:
-            Bloss, Bpenalty = zipB
+        loss = Mloss + Sloss
+        if 'pb' in loss:
+            Bloss = loss['pb']
             loss = loss + Bloss
-            penalty = penalty + Bpenalty
             summary['loss/BIRADs focal'] = Bloss.detach()
-            summary['penalty/CAM_BIRADs'] = Bpenalty.detach()
-        return res, loss + penalty / 32, summary
+        return res, loss, summary
 
     def loss(self, *args, **argv):
         '''

@@ -15,20 +15,28 @@ class ChannelInference:
         self.ic = ic
         self.oc = oc
 
-class ConvStack2(nn.Sequential, ChannelInference):
+class ConvStack2(nn.Module, ChannelInference):
     '''
     [N, ic, H, W] -> [N, oc, H, W]
     '''
-    def __init__(self, ic, oc):
-        nn.Sequential.__init__(
-            self, 
+    def __init__(self, ic, oc, res=False):
+        nn.Module.__init__(self)
+        self.res = res
+        self.CR = nn.Sequential(
             nn.Conv2d(ic, oc, 3, 1, 1), 
-            nn.ReLU(),
+            nn.ReLU()
+        )
+        self.CBR = nn.Sequential(
             nn.Conv2d(oc, oc, 3, 1, 1, bias=False), 
             nn.BatchNorm2d(oc),
             nn.ReLU()
         )
         ChannelInference.__init__(self, ic, oc)
+
+    def forward(self, X):
+        X = self.CR(X)
+        if self.res: return X + self.CBR(X)
+        return self.CBR(X)
 
 class DownConv(nn.Conv2d, ChannelInference):
     '''
@@ -54,23 +62,22 @@ class UpConv(nn.Sequential, ChannelInference):
         )
         ChannelInference.__init__(self, ic, ic // 2)
 
-class UNet(nn.Module):
+class UNetWOHeader(nn.Module):
     '''
-    [N, ic, H, W] -> [N, fc, H, W], [N, oc, H, W]
+    [N, ic, H, W] -> [N, fc * 2^level, H, W], [N, fc, H, W]
     '''
-    def __init__(self, ic, oc, level=4, fc=64, softmax=False, memory_trade=False):
+    def __init__(self, ic, level=4, fc=64, inner_res=False, memory_trade=False):
         nn.Module.__init__(self)
         self.level = level
-        self.softmax = softmax
         self.cps = CheckpointSupport(memory_trade)
-
-        self.L1 = ConvStack2(ic, fc)
+        self.fc = fc
+        self.L1 = ConvStack2(ic, fc, res=inner_res)
         cc = self.L1.oc
 
         for i in range(level):
             dsample = DownConv(cc)
             cc = dsample.oc
-            conv = ConvStack2(cc, oc=cc * 2)
+            conv = ConvStack2(cc, oc=cc * 2, res=inner_res)
             cc = conv.oc
             self.add_module('D%d' % (i + 1), dsample)
             self.add_module('L%d' % (i + 2), conv)
@@ -78,12 +85,11 @@ class UNet(nn.Module):
         for i in range(level):
             usample = UpConv(cc)
             cc = usample.oc
-            conv = ConvStack2(cc * 2, cc)
+            conv = ConvStack2(cc * 2, cc, res=inner_res)
             cc = conv.oc
             self.add_module('U%d' % (i + 1), usample)
             self.add_module('L%d' % (i + 6), conv)
         
-        self.DW = nn.Conv2d(fc, oc, 1)
 
     def add_module(self, name, model):
         return nn.Module.add_module(self, name, self.cps(model))
@@ -104,7 +110,7 @@ class UNet(nn.Module):
         # Y = torch.nn.functional.pad(Y, (padl, padr, padt, padb), 'constant')
         return torch.cat([X, Y], dim=1)
         
-    def forward(self, X):
+    def forward(self, X, expand=True):
         '''
         X: [N, C, H, W]
         O: [N, fc, H, W], [N, oc, H, W]
@@ -118,6 +124,8 @@ class UNet(nn.Module):
 
         for i in range(1, self.level + 1):
             xn.append(L_(i + 1)(D_(i)(xn[-1])))   # [N, t * fc, H//t, W//t], t = 2^i
+        bottomx = xn[-1]
+        if not expand: return bottomx, None
 
         for i in range(self.level):
             xn.append(L_(self.level + i + 2)(
@@ -125,13 +133,25 @@ class UNet(nn.Module):
                 self._padCat(X_(self.level - i), U_(i + 1)(X_(self.level + i + 1)))
             ))
 
-        finalx = xn[-1]
-        logit = self.DW(finalx)     # [N, oc, H, W]
+        return bottomx, xn[-1]
+        
 
-        if self.softmax: 
-            return finalx, torch.softmax(logit, 1)
-        else: 
-            return finalx, torch.sigmoid(logit)
+class UNet(UNetWOHeader):
+    def __init__(self, oc, headers=[], *args, softmax=False, **kwargs):
+        UNetWOHeader.__init__(self, *args, **kwargs)
+        headers = [nn.Conv2d(self.fc, oc, 1)]
+        headers.extend(
+            nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1)) for oc in headers
+        )
+        self.headers = headers
+        self.sigma = nn.Softmax(1) if softmax else nn.Sigmoid()
+
+    def forward(self, X, expand=True):
+        bottomx, finalx = UNetWOHeader.forward(self, X, expand)
+        if not expand: return bottomx, *(None for f in self.headers)
+
+        act = (self.sigma(f(finalx)) for f in self.headers)
+        return bottomx, *act
 
 if __name__ == "__main__":
     unet = UNet(3, 1, 16)
