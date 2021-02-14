@@ -17,16 +17,18 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
 
     dumper = IndexDumper(os.path.join(outpath, name + '.imgs'))
     with open(os.path.join(inpath, 'labels.yml')) as f: 
-        mdic, bdic = yaml.safe_load_all(f)
+        mdic, bdic, maskdic = yaml.safe_load_all(f)
 
     idxs = []
     for D in datasets:
         DD = os.path.join(inpath, D)
         pics = os.listdir(DD)
         for p in pics:
-            fname, _ = os.path.splitext(p)
             DDP = os.path.join(DD, p)
+            if os.path.isdir(DDP): continue
+            fname, _ = os.path.splitext(p)
             img = cv.imread(DDP, 0)
+            if img is None: raise ValueError(DDP)
             dic = shapedic[img.shape]
 
             img = torch.from_numpy(img).unsqueeze(0)
@@ -36,6 +38,13 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
             if 'X' in dic: dic['X'].append(len(idxs) - 1)
             if 'Ym' in dic: dic['Ym'].append(mdic[fname])
             if 'Yb' in dic: dic['Yb'].append(BIRAD_NAME.index(bdic[fname]))
+            if 'mask' in dic: 
+                for p in maskdic[fname]: 
+                    img = cv.imread(p, 0)
+                    img = torch.from_numpy(img).unsqueeze(0)
+                    img = img / img.max()
+                    idxs.append(dumper.dump(img))
+                    dic['mask'].append(len(idxs) - 1)
 
     for dic in shapedic.values():
         for t in ['Ym', 'Yb']:

@@ -26,7 +26,7 @@ class ChainSubsetRandomSampler(Sampler[int]):
         if not all(isinstance(i, dict) for i in meta.values()) or len(meta) == 1:
             return [CumulativeRandomSampler(start, dataset)]
 
-        hashf = lambda m: hash((m['shape'], 'Yb' in m['title']))
+        hashf = lambda m: (m['shape'], 'Yb' in m['title'], 'mask' in m['title'], )
         # dataset: ConcatDataset
         if len(set(hashf(i) for i in meta.values())) == 1:
             return [CumulativeRandomSampler(start, dataset)]
@@ -45,7 +45,7 @@ class ChainSubsetRandomSampler(Sampler[int]):
         return sum(len(i) for i in self.sampler)
 
 class FixLoader(DataLoader):
-    title = ('X', 'Ym', 'Yb')
+    title = ('X', 'Ym', 'Yb', 'mask')
 
     def __init__(self, dataset: ConcatDataset, batch_size=1, shuffle=False, device=None, **otherconf):
         DataLoader.__init__(
@@ -68,11 +68,11 @@ class FixLoader(DataLoader):
         '''
         1. fix num of return vals
         2. device transfering
-        3. make sure only one shape in the batch.
-        4. augment the batch if drop_last. For caller may expect any length of batch is fixed.
+        3. make sure only one shape and annotation type in the batch.
+        4. augment the batch if drop_last. For caller may expect length of any batch is fixed.
         '''
         N = len(x)
-        hashf = lambda i: hash((i['X'].shape, 'Yb' in i, ))
+        hashf = lambda i: (i['X'].shape, 'Yb' in i, 'mask' in i, )
 
         hashstat = defaultdict(list)
         for i in x: hashstat[hashf(i)].append(i)

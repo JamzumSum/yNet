@@ -9,15 +9,15 @@ from utils.utils import getConfig
 td, vd = classSpecSplit(
     DistributedConcatSet([
         CachedDatasetGroup('./data/set2/set2.pt'), 
-        CachedDatasetGroup('./data/set3/set3.pt')
+        CachedDatasetGroup('./data/set3/set3.pt'),
+        CachedDatasetGroup('./data/BUSI/BUSI.pt')
     ], tag=['set2', 'set3']), 8, 2
 )
-tda = augmentWith(td, ElasticAugmentSet, 'Ym', 480)
 print('trainset distribution:', td.distribution)
 print('validation distribution:', vd.distribution)
 
 trainer = ToyNetTrainer(ToyNetV1, getConfig('./config/toynetv1.yml'))
-trainer.train(tda, vd, no_aug=td)
+trainer.train(td, vd)
 
 post = trainer.paths.get('post_training', '')
 if post and os.path.exists(post):

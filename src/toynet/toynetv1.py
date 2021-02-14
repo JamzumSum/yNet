@@ -114,8 +114,6 @@ class ToyNetV1(BIRADsUNet):
         Ym: [N], long
         Yb: [N], long
         piter: float in (0, 1)
-        mweight: bengin/malignant weights
-        bweight: BIRADs weights
         '''
         return self.lossWithResult(*args, **argv)[1:]
 

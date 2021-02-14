@@ -1,26 +1,32 @@
+import argparse
+import os
+from shutil import copytree
+
 import cv2 as cv
 import numpy as np
-import os
 import yaml
-import argparse
 
 
-def CentralCrop(inpath, dataset):
+def CentralCrop(inpath, dataset, maskdic=None):
     DD = os.path.join(inpath, dataset)
     pics = os.listdir(DD)
     for i in pics:
-        DDP = os.path.join(DD, i)
-        img = cv.imread(DDP)
-        f = 512 / min(img.shape[:2])
-        rimg = cv.resize(img, None, fx=f, fy=f)
-        assert 512 == min(rimg.shape[:2])
+        pgroup = [os.path.join(DD, i)]
+        if os.path.isdir(*pgroup): continue
+        if maskdic: pgroup.extend(maskdic.get(os.path.splitext(i)[0], [])) 
+        for DDP in pgroup:
+            img = cv.imread(DDP, 0)
+            
+            f = 512 / min(img.shape[:2])
+            rimg = cv.resize(img, None, fx=f, fy=f)
+            assert 512 == min(rimg.shape[:2])
 
-        r, c, _ = rimg.shape
-        r = (r - 512) // 2
-        c = (c - 512) // 2
-        rimg = rimg[r: r + 512, c: c + 512] # [512, 512, 3]
-        cv.imwrite(DDP, rimg)
-        print(DDP, img.shape, '->', rimg.shape)
+            r, c = rimg.shape
+            r = (r - 512) // 2
+            c = (c - 512) // 2
+            rimg = rimg[r: r + 512, c: c + 512] # [512, 512]
+            cv.imwrite(DDP, rimg)
+            print(DDP, img.shape, '->', rimg.shape)
 
 def resizeWithCluster(path):
     with open(path) as f:
@@ -43,6 +49,9 @@ if __name__ == "__main__":
     else:
         datasets = [i for i in os.listdir(inpath) if os.path.isdir(os.path.join(inpath, i))]
     
+    with open(os.path.join(inpath, 'labels.yml')) as f: 
+        _, _, maskdic = yaml.safe_load_all(f)
+
     for i in datasets:
-        CentralCrop(inpath, i)
+        CentralCrop(inpath, i, maskdic)
     # resizeWithCluster('./data/BIRADs/crafted/boxcluster.yml')

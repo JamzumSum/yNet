@@ -122,6 +122,7 @@ class CachedDataset(Distributed):
         item = {title: self.dics[title][i] for title in self.titles}
         if fetch:
             item['X'] = self.loader.load(item['X'])
+            if 'mask' in item: item['mask'] = self.loader.load(item['mask'])
         return item
 
     def __len__(self): return len(first(self.dics.values()))
