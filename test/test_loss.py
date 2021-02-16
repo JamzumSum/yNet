@@ -1,9 +1,11 @@
 from unittest import TestCase
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from common.loss import focalBCE
+from common.loss import focalBCE, SemiHardTripletLoss
 from toynet.toynetv1 import ToyNetV1
+
 
 class FocalTest(TestCase):
     K = 6
@@ -67,3 +69,46 @@ class TripletTest(TestCase):
         self.assertTrue(torch.all(n == c[3]))
         loss = F.triplet_margin_loss(a, p, n, 1)
         print(loss)
+
+    def testTriplet(self):
+        c = torch.randn(8, 2) * 100
+        c = c.requires_grad_()
+        Y = torch.LongTensor([0] * 4 + [1] * 4)
+        op = torch.optim.SGD((c,), lr=0.01)
+
+        print()
+        print(c)
+        for epoch in range(10000):
+            apn = ToyNetV1.apn(c, Y)
+            if apn: 
+                loss = F.triplet_margin_loss(*apn, margin=1., swap=True)
+                loss.backward()
+                op.step()
+        print(c)
+
+    def testTriplet2(self):
+        c = torch.randn(8, 2, requires_grad=True)
+        Y = torch.LongTensor([0] * 4 + [1] * 4)
+        crit = SemiHardTripletLoss(.3)
+        op = torch.optim.Adam((c,), lr=1e-4, weight_decay=0.01)
+
+        print()
+        print(c)
+        loss = 1
+        while loss > 0.4:
+            loss = crit(c, Y)
+            loss.backward()
+            op.step()
+        print(c)
+        while loss > 0.3:
+            loss = crit(c, Y)
+            loss.backward()
+            op.step()
+        print(c)
+        for i in range(1000):
+            loss = crit(c, Y)
+            loss.backward()
+            op.step()
+        print('loss =', loss)
+        print(c)
+        

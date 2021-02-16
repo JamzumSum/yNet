@@ -1,11 +1,8 @@
 model:      # model constructor
-  in_channel: 1
+  ic: 1
   K: 6     # 2, 3, 4a, 4b, 4c, 5
-  patch_sizes: 
-    - 32
-    - 64
-    - 128
   fc: 16
+  ylevel: 1   # for (512, 512) image, unet level + ylevel <= 8
   pi: 0.5
   memory_trade: True
 
@@ -14,8 +11,8 @@ training:
   device: cuda:0
   continue: False
   load_from: latest
-  max_epoch: 100
-  use_annotation_from: 15
+  max_epoch: 80
+  use_annotation_from: 0
 
 optimizer:
   - Adam
@@ -30,15 +27,18 @@ scheduler:
 branch:
   default:
     scheduler: null
+  M: 
     optimizer:
       - Adam
       - lr: 1.e-3
         weight_decay: 1.0e-3
-  M: 
-    optimizer:
-      - Adam
-      - lr: 5.0e-8
-        weight_decay: 1.0e-3
+    scheduler: 
+      factor: 0.98
+      patience: 2
+      cooldown: 2
+      verbose: False
+  B:
+    scheduler: null
   discriminator:
     scheduler:
       factor: 0.1
@@ -47,12 +47,12 @@ branch:
 
 dataloader:
   training:
-    batch_size: 16
+    batch_size: 12
     shuffle: True
   scoring:
-    batch_size: 16
+    batch_size: 12
     
 paths:
-  model_dir: model/toynetv1/seplr
-  log_dir: log/toynetv1/{date}-seplr
+  model_dir: model/toynetv1/ynet
+  log_dir: log/toynetv1/{date}-ynet
   post_training: src/post_training.py

@@ -40,16 +40,19 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
             if 'Ym' in dic: dic['Ym'].append(mdic[fname])
             if 'Yb' in dic: dic['Yb'].append(BIRAD_NAME.index(bdic[fname]))
             if 'mask' in dic: 
+                masks = []
                 for p in maskdic[fname]: 
                     img = cv.imread(p, 0)
                     assert not np.any(np.isnan(img)), p
                     img = torch.from_numpy(img).unsqueeze(0)
-                    if torch.any(img > 0): img = img / img.max()
-                    else: img = img.type(torch.float)
-                    idxs.append(dumper.dump(img))
-                    dic['mask'].append(len(idxs) - 1)
+                    masks.append(img > 0)
+                masks = sum(masks).float()
+                idxs.append(dumper.dump(masks))
+                dic['mask'].append(len(idxs) - 1)
 
     for dic in shapedic.values():
+        if 'mask' in dic:
+            assert len(dic['mask']) == len(dic['X'])
         for t in ['Ym', 'Yb']:
             if t in dic:
                 if t in statdic:

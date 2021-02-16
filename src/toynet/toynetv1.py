@@ -8,26 +8,37 @@ from itertools import chain
 
 import torch
 import torch.nn as nn
-from common.loss import F, focalBCE
+from common.loss import F, focalBCE, SemiHardTripletLoss
 from common.utils import unsqueeze_as
 
 from .discriminator import WithCD
-from .unet import UNet
+from .unet import UNet, ConvStack2, DownConv
 
 class BIRADsUNet(nn.Module):
     '''
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     '''
-    def __init__(self, ic, K, fc=64, pi=.5, memory_trade=False):
+    def __init__(self, ic, K, fc=64, ylevel=1, pi=.5, memory_trade=False):
         nn.Module.__init__(self)
         self.unet = UNet(
             ic=ic, oc=1, fc=fc,
             inner_res=True, memory_trade=memory_trade
         )
         self.memory_trade = memory_trade
+        self.ylevel = ylevel
+
+        cc = self.unet.fc * 2 ** self.unet.level
+        mls = []
+        for _ in range(ylevel):
+            mls.append(DownConv(cc))
+            conv = ConvStack2(mls[-1].oc, oc=cc * 2, res=True)
+            mls.append(conv)
+            cc = mls[-1].oc
+
+        self.ypath = nn.Sequential(*mls)
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.mfc = nn.Linear(self.unet.fc * 2 ** self.unet.level, 2)
-        self.bfc = nn.Linear(self.unet.fc * 2 ** self.unet.level, K)
+        self.mfc = nn.Linear(cc, 2)
+        self.bfc = nn.Linear(cc, K)
 
     def forward(self, X, segment=True):
         '''
@@ -39,7 +50,8 @@ class BIRADsUNet(nn.Module):
         - Pb        [N, K]
         '''
         c, segment = self.unet(X, segment)
-        x = self.pool(c).squeeze(2).squeeze(2)    # [N, fc * 2^level]
+        if self.ylevel: c = self.ypath(c)
+        x = self.pool(c).squeeze(2).squeeze(2)    # [N, fc * 2^(level + ylevel)]
         Pm = F.softmax(self.mfc(x), dim=1)    # [N, 2]
         Pb = F.softmax(self.bfc(x), dim=1)    # [N, K]
         return segment, x, Pm, Pb
@@ -54,6 +66,7 @@ class ToyNetV1(BIRADsUNet):
     support = ('segment', )
     mweight = torch.Tensor([.4, .6])
     bweight = torch.Tensor([.1, .2, .2, .2, .2, .1])
+    sh_triloss = SemiHardTripletLoss()
 
     @staticmethod
     def apn(c, Y, K=-1):
@@ -62,36 +75,41 @@ class ToyNetV1(BIRADsUNet):
         Y: [N]
         return:
             a: [1, D]
-            p: [1, D]
+            p: [num_p, D]. num_p is the number of all postive samples except the anchor.
             n: [1, D]
         '''
         distrib = torch.bincount(Y)     # [K]
+        N = c.size(0)
+        K = distrib.size(0)
         inf_safe = torch.any(distrib == 0)
         if inf_safe and (distrib != 0).sum() < 2: 
-            print('Warning: Less than 2 classes in the batch. Cannot calc. triplet.')
+            print('Warning: Less than 2 classes in the batch. Cannot calculate triplet. Skipped.')
             return
 
         mask = F.one_hot(Y, num_classes=K).unsqueeze(1)   # [N, 1, K]
         K = mask.shape[-1]
-        ck = c.unsqueeze(-1) * mask               # [N, D, K], masked.
+        ck = c.unsqueeze(-1) * mask             # [N, D, K], masked.
 
-        mean = ck.sum(dim=0) / distrib              # [D, K]
+        mean = ck.sum(dim=0) / distrib          # [D, K]
         if inf_safe: mean[mean.isinf()] = 0
-        center = torch.pow((ck - mean) * mask, 2)   # [N, D, K]
-        std = center.sum(dim=0) / distrib           # [D, K]
+        center = torch.pow((ck - mean) * mask, 2).sum(dim=1)   # [N, K]
+        std = center.sum(dim=0) / distrib       # [K]
         if inf_safe: std[std.isinf()] = 0
 
-        acls = (std).sum(dim=0).argmax()
-        arga = center[:, :, acls].sum(dim=1).argmax()
-        a = c[arga].unsqueeze(0)                   # [N, D]
+        acls = std.argmax()
+        arga = center[:, acls].argmax()
+        a = c[arga].unsqueeze(0)                # [N, D]
 
         center_a = torch.pow((ck - a.unsqueeze(-1)) * mask, 2).sum(dim=1)      # [N, K]
-        argp = torch.argmax(center_a[:, acls])
-        p = c[argp].unsqueeze(0)                   # [N, D]
+        argp = Y == acls
+        argp[arga] = False
+        p = c[argp][: max(1, N // K)]
+        dp = center_a[:, acls].max()
 
         inf = center_a.max() + 1
         center_a[:, acls] = inf
         center_a[center_a == 0] = inf
+        center_a[center_a <= dp] = inf
         argn = center_a.min(dim=1).values.argmin()
         n = c[argn].unsqueeze(0)
 
@@ -108,41 +126,40 @@ class ToyNetV1(BIRADsUNet):
             self.bweight = self.bweight.to(X.device)
 
         res = self.forward(X, mask is not None)
-        seg, c, Pm, Pb = res
+        seg, embed, Pm, Pb = res
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
         loss = {}
         
-        loss['pm'] = focalBCE(Pm, Ym, K=2, gamma=1 + piter, weight=self.mweight)
+        loss['pm'] = focalBCE(Pm, Ym, gamma=1 + piter, weight=self.mweight)
 
         if seg is not None:
-            # TODO: maybe a weighted mse?
-            loss['seg'] = F.mse_loss(seg, mask)
+            loss['seg'] = ((seg - mask) ** 2 * (mask + 1)).mean()
 
         if Yb is not None: 
-            loss['pb'] = focalBCE(Pb, Yb, K=self.K, gamma=1 + piter, weight=self.bweight)
+            loss['pb'] = focalBCE(Pb, Yb, gamma=1 + piter, weight=self.bweight)
 
-        loss['tri'] = F.triplet_margin_loss(*self.apn(c, Ym), margin=1., swap=True)
+        # mcount = torch.bincount(Ym)
+        # if len(mcount) == 2 and mcount[0] > 0:
+        #     loss['tm'] = self.sh_triloss(embed, Ym)
         # TODO: triplet of BIRADs
         return res, loss
 
     def lossWithResult(self, *args, **argv):
         res, loss = self._loss(*args, **argv)
-        Mloss = loss['pm']
-        Tloss = loss['tri']
-        cum_loss = Mloss + Tloss
-        summary = {
-            'loss/malignant focal': Mloss.detach(), 
-            'loss/triplet-m': Tloss.detach()
+        itemdic = {
+            'pm': 'm-CE',
+            'tm': 'm-triplet',
+            'seg': 'segment-mse',
+            'pb': 'b-CE',
+            # 'tb': 'b-triplet'
         }
-        if 'seg' in loss:
-            Sloss = loss['seg']
-            cum_loss = cum_loss + Sloss
-            summary['loss/segment mse'] = Sloss.detach()
-        if 'pb' in loss:
-            Bloss = loss['pb']
-            cum_loss = cum_loss + Bloss
-            summary['loss/BIRADs focal'] = Bloss.detach()
+        cum_loss = 0
+        summary = {}
+        for k, v in itemdic.items():
+            if k not in loss: continue
+            cum_loss = cum_loss + loss[k]
+            summary['loss/' + v] = loss[k].detach()
         return res, cum_loss, summary
 
     def loss(self, *args, **argv):

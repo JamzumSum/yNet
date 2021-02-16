@@ -22,21 +22,22 @@ class ConvStack2(nn.Module, ChannelInference):
     def __init__(self, ic, oc, res=False):
         nn.Module.__init__(self)
         self.res = res
-        self.CR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1), 
-            nn.ReLU()
-        )
         self.CBR = nn.Sequential(
-            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), 
+            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), 
             nn.BatchNorm2d(oc),
             nn.ReLU()
+        )
+        self.CB = nn.Sequential(
+            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), 
+            nn.BatchNorm2d(oc)
         )
         ChannelInference.__init__(self, ic, oc)
 
     def forward(self, X):
-        X = self.CR(X)
-        if self.res: return X + self.CBR(X)
-        return self.CBR(X)
+        X = self.CBR(X)
+        if self.res: X = X + self.CB(X)
+        else: X = self.CB(X)
+        return torch.relu(X)
 
 class DownConv(nn.Conv2d, ChannelInference):
     '''
@@ -137,14 +138,14 @@ class UNetWOHeader(nn.Module):
         
 
 class UNet(UNetWOHeader):
-    def __init__(self, oc, headers=[], *args, softmax=False, **kwargs):
+    def __init__(self, oc, headers=[], *args, **kwargs):
         UNetWOHeader.__init__(self, *args, **kwargs)
         self.headers = [nn.Conv2d(self.fc, oc, 1)]
         self.headers.extend(
             nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1)) for oc in headers
         )
         for i, f in enumerate(self.headers): self.add_module("header %d" % (i + 1), f)
-        self.sigma = nn.Softmax(1) if softmax else nn.Sigmoid()
+        self.sigma = nn.Sigmoid()
 
     def forward(self, X, expand=True):
         bottomx, finalx = UNetWOHeader.forward(self, X, expand)

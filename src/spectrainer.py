@@ -12,7 +12,8 @@ from progress.bar import Bar
 
 from common.decorators import Batched, NoGrad
 from common.trainer import Trainer
-from common.utils import ConfusionMatrix, freeze, gray2JET, unsqueeze_as
+from common.utils import ConfusionMatrix, gray2JET, unsqueeze_as
+from common.loss import diceCoefficient
 from utils.dict import shallow_update
 from data.dataloader import FixLoader
 
@@ -93,7 +94,7 @@ class ToyNetTrainer(Trainer):
         if no_aug is None: no_aug = td
         # get all loaders
         loader = FixLoader(td, device=self.device, **self.dataloader['training'])
-        vloader = FixLoader(vd, device=self.device, batch_size=loader.batch_size)
+        vloader = FixLoader(vd, device=self.device, batch_size=loader.batch_size, shuffle=True)
 
         # get all optimizers and schedulers
         gop, gsg = self.getBranchOptimizerAndScheduler('default')
@@ -113,10 +114,10 @@ class ToyNetTrainer(Trainer):
         
         trainWithDataset = Batched(self.trainInBatch)
 
-        # if self.cur_epoch == 0:
-        #     demo = first(loader)['X'][:2]
-        #     self.board.add_graph(self.net, demo)
-        #     del demo
+        if self.cur_epoch == 0:
+            demo = first(loader)['X'][:2]
+            self.board.add_graph(self.net, demo)
+            del demo
 
         ops = (gop, )
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
@@ -149,8 +150,8 @@ class ToyNetTrainer(Trainer):
                 if msg: msg.step(ll)
                 if bsg: bsg.step(ll)
 
-            merr, _ = self.score('ourset/trainset', no_aug)      # trainset score
-            merr, _ = self.score('ourset/validation', vd)        # validation score
+            merr = self.score('trainset', no_aug)[0]      # trainset score
+            merr = self.score('validation', vd)[0]        # validation score
             self.traceNetwork()
             
             if merr < self.best_mark:
@@ -159,58 +160,68 @@ class ToyNetTrainer(Trainer):
             self.save('latest', merr)
 
     @NoGrad
-    def score(self, caption, dataset):
+    def score(self, caption, dataset, thresh=.5):
         '''
         Score and evaluate the given dataset.
         '''
         self.net.eval()
-        measureB = 'Yb' in dataset.statTitle
-        mcm = ConfusionMatrix(2)
-        bcm = ConfusionMatrix(self.net.K) if measureB else None
-        dcm = ConfusionMatrix(2) if self.adversarial else None
-
         def scoresInBatch(X, Ym, Yb=None, mask=None):
-            nonlocal mcm, dcm, bcm
-            Pm, Pb = self.net(X)[-2:]
+            seg, embed, Pm, Pb = self.net(X)
+            res = {
+                'pm': Pm,
+                'pb': Pb,
+                'ym': Ym,
+                'c': embed
+            }
             if self.adversarial:
-                cy0 = self.net.D(Pm, Pb).round().int()
-                dcm.add(cy0, torch.zeros_like(cy0))
+                cy0 = self.net.D(Pm, Pb)
+                res['cy'] = cy0
+                res['cy-GT'] = torch.zeros_like(cy0, dtype=torch.long)
+            
+            if seg is not None:
+                res['dice'] = diceCoefficient(seg, mask, reduction='none')
 
-            Pm = Pm.argmax(dim=1)
-            Pb = Pb.argmax(dim=1)
-            mcm.add(Pm, Ym)
-            if Yb is None: return Pm, Pb
-
-            Yb = Yb.to(self.device)
-            bcm.add(Pb, Yb)
-            if self.adversarial:
+            if Yb is not None: 
+                res['yb'] = Yb
+            if self.adversarial and Yb is not None:
                 cy1 = self.net.D(
+                    # TODO: perturbations
                     F.one_hot(Ym, num_classes=2).float(), 
                     F.one_hot(Yb, num_classes=self.net.K).float()
-                ).round().int()
-                dcm.add(cy1, torch.ones_like(cy1))
-            return Pm, Pb
+                )
+                res['cy'] = torch.cat((res['cy'], cy1), dim=0)
+                res['cy-GT'] = torch.cat((res['cy-GT'], torch.ones_like(cy1, dtype=torch.long)), dim=0)
+            return res
         
         loader = FixLoader(dataset, device=self.device, **self.dataloader['scoring'])
-        Pm, Pb = Batched(scoresInBatch)(loader)
+        res: dict = Batched(scoresInBatch)(loader)
+        self.board.add_embedding(res['c'], metadata=res['ym'].tolist(), global_step=self.cur_epoch, tag=caption)
 
-        cmdic = {
-            'B-M': mcm, 
-        }
         errl = []
-        if bcm: cmdic['BIRAD'] = bcm
-        if dcm: cmdic['discrim'] = dcm
+        items = {
+            'B-M': ('pm', 'ym'), 
+            'BIRAD': ('pb', 'yb'),
+            'discrim': ('cy', 'cy-GT')
+        }
+        for k, (p, y) in items.items():
+            if y not in res: continue
+            p, y = res[p], res[y]
+            
+            if p.dim() == 1: argp = (p > thresh).int()
+            elif p.dim() == 2: argp = p.argmax(dim=1)
+            err = (argp != y).float().mean()
+            self.board.add_scalar('err/%s/%s' % (k, caption), err, self.cur_epoch)
+            errl.append(err)
 
-        for k, v in cmdic.items():
-            errl.append(v.err())
-            self.board.add_image('ConfusionMat/%s/%s' % (k, caption), v.mat(), self.cur_epoch, dataformats='HW')
-            self.board.add_scalar('err/%s/%s' % (k, caption), errl[-1], self.cur_epoch)
-            self.board.add_scalar('f1/%s/%s' % (k, caption), v.fscore(), self.cur_epoch)
-        
-        self.board.add_histogram('distribution/malignant/%s' % caption, Pm, self.cur_epoch)
-        self.board.add_histogram('distribution/BIRADs/%s' % caption, Pb, self.cur_epoch)
+            if p.dim() == 1: 
+                self.board.add_pr_curve('%s/%s' % (k, caption), p, y, self.cur_epoch)
+            elif p.dim() == 2 and p.size(1) <= 2: 
+                self.board.add_pr_curve('%s/%s' % (k, caption), p[:, -1], y, self.cur_epoch)
+            
+        self.board.add_histogram('distribution/malignant/%s' % caption, res['pm'], self.cur_epoch)
+        self.board.add_histogram('distribution/BIRADs/%s' % caption, res['pb'], self.cur_epoch)
 
-        if not (self.logSegmap or self.logHotmap): return errl[:2]
+        if not (self.logSegmap or self.logHotmap): return errl
 
         # log images
         # BUG: since datasets are sorted, images extracted are biased. (Bengin & BIRADs-2)
@@ -228,7 +239,7 @@ class ToyNetTrainer(Trainer):
             
         if self.logSegmap:
             X = first(loader)['X'][:8].to(self.device)
-            seg = self.net(X, segment=True)[0]
+            seg = self.net(X, segment=True)[0].squeeze(1)
             self.board.add_images('%s/segment' % caption, heatmap(X, seg), self.cur_epoch)
 
-        return errl[:2]
+        return errl

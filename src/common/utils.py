@@ -13,29 +13,6 @@ def unsqueeze_as(s, t, dim=-1):
         s = s.unsqueeze(dim)
     return s
 
-def cond_trans(T, F, cond):
-    '''
-    Conditional transfer like: 
-        [t if c else f for t, f, c in zip(T, F, cond)]
-    - T: [N, ...]
-    - F: [N, ...], same as T
-    - cond: [N] or [N, 1]. 0/1
-    return [N, ...], same as T
-    '''
-    assert T.shape == F.shape
-    cond = unsqueeze_as(cond, T, 1) # [N, ...]
-    return T * cond + F * (1 - cond)
-
-def class_trans(T, F, cond):
-    '''
-    T: [N, K, ...]
-    F: [N, K, ...]
-    cond: [N, K]
-    return [N, ...]
-    '''
-    cond = unsqueeze_as(cond, T, 2) # [N, K, ...]
-    return (T * cond + F * (1 - cond)).sum(dim=1)
-
 def gray2JET(x, thresh=.5):
     """
     - x: [..., H, W],       NOTE: float 0~1
@@ -169,3 +146,18 @@ class PyramidPooling(nn.Module):
         ls.insert(0, base)
         ls = torch.stack(ls, dim=-1)    # [N, K, H//P0, W//P0, L]
         return self.atn(ls)
+
+class DirectLR(torch.optim.lr_scheduler._LRScheduler):
+    @property
+    def lr(self): return self.get_last_lr()
+
+    def set_lr(self, lr):
+        if not isinstance(lr, list) and not isinstance(lr, tuple):
+            self._lr = [lr] * len(self.optimizer.param_groups)
+        else:
+            if len(lr) != len(self.optimizer.param_groups):
+                raise ValueError("Expected {} lr, but got {}".format(
+                    len(self.optimizer.param_groups), len(lr)))
+            self._lr = list(lr)
+
+    def get_lr(self): return self._lr
