@@ -146,6 +146,7 @@ class ToyNetTrainer(Trainer):
             dop = dsg = None
         # init tensorboard logger
         self.prepareBoard()
+        self.progress.start()
         # lemme see who dare to use cpu for training ???
         if self.device.type == "cpu":
             warn("You are using CPU for training ಠಿ_ಠ")
@@ -196,6 +197,7 @@ class ToyNetTrainer(Trainer):
                 barstep=lambda s: self.progress.update(tid, advance=s),
             )
             self.progress.stop_task(tid)
+            self.progress.remove_task(tid)
             if self.adversarial:
                 tll, dll = res
                 dll = dll.mean()
@@ -209,6 +211,7 @@ class ToyNetTrainer(Trainer):
             )
             vll = torch.cat(vll).mean()
             self.progress.stop_task(tid)
+            self.progress.remove_task(tid)
             ll = (tll + vll) / 2
 
             if dsg:
@@ -235,11 +238,12 @@ class ToyNetTrainer(Trainer):
         Score and evaluate the given dataset.
         """
         self.net.eval()
-        tid = self.progress.add_task("evaluating...", total=3)
+        tid = self.progress.add_task("score %03d" % self.cur_epoch, total=len(dataset) + 2)
 
         def scoresInBatch(X, Ym, Yb=None, mask=None):
             seg, embed, Pm, Pb = self.net(X)
-            guide_pm, guide_pb = self.net(X, mask=seg)
+            _, _, guide_pm, guide_pb = self.net(X, mask=seg, segment=False)
+            self.progress.update(tid, advance=len(X))
 
             res = {
                 "pm": Pm,
@@ -273,7 +277,6 @@ class ToyNetTrainer(Trainer):
 
         loader = FixLoader(dataset, device=self.device, **self.dataloader["scoring"])
         res: dict = Batched(scoresInBatch)(loader)
-        self.progress.update(tid, completed=1)
 
         self.board.add_embedding(
             res["c"],
@@ -313,11 +316,11 @@ class ToyNetTrainer(Trainer):
                 )
 
         if not (self.logSegmap or self.logHotmap):
-            self.progress.update(tid, completed=3)
+            self.progress.update(tid, advance=2)
             self.progress.stop_task(tid)
             return errl
         else:
-            self.progress.update(tid, completed=2)
+            self.progress.update(tid, advance=1)
 
         # log images
         # BUG: since datasets are sorted, images extracted are biased. (Bengin & BIRADs-2)
@@ -349,6 +352,7 @@ class ToyNetTrainer(Trainer):
                 "%s/segment" % caption, heatmap(X, seg), self.cur_epoch
             )
 
-        self.progress.update(tid, completed=3)
+        self.progress.update(tid, advance=1)
         self.progress.stop_task(tid)
+        self.progress.remove_task(tid)
         return errl

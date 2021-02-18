@@ -107,8 +107,9 @@ class BIRADsUNet(nn.Module):
 
     def parameter_groups(self, weight_decay: dict):
         paramAll = self.parameters()
+        torch.optim
         paramB = tuple(self.bfc.parameters())
-        paramM = (p for p in paramAll if id(p) not in [id(i) for i in paramB])
+        paramM = tuple(p for p in paramAll if id(p) not in [id(i) for i in paramB])
         need_decay = []
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

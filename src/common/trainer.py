@@ -29,7 +29,7 @@ class Trainer:
         self.model_conf = conf.get('model', {})
 
         self.net = Net(**self.model_conf)
-        self.progress = Progress(transient=True)
+        self.progress = Progress(transient=True, refresh_per_second=2)
 
         try: self.load(self.training.get('load_from', 'latest'))
         except ValueError as e:
