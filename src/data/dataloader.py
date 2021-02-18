@@ -38,7 +38,7 @@ class ChainSubsetRandomSampler(Sampler[int]):
         ])
 
     def __iter__(self):
-        shuffle_(self.sampler)
+        # shuffle_(self.sampler)
         return chain(*tuple(iter(i) for i in self.sampler))
 
     def __len__(self):

@@ -1,9 +1,9 @@
 model:      # model constructor
-  ic: 1
-  K: 6     # 2, 3, 4a, 4b, 4c, 5
-  fc: 16
-  ylevel: 1   # for (512, 512) image, unet level + ylevel <= 8
-  pi: 0.5
+  in_channel: 1
+  K: 6      # 2, 3, 4a, 4b, 4c, 5
+  width: 16
+  ulevel: 4
+  ylevel: 1   # for (512, 512) image, unet level + ypath level <= 8
   memory_trade: True
 
 # training strategy
@@ -16,27 +16,21 @@ training:
 
 optimizer:
   - Adam
-  - lr: 5.0e-4
+  - lr: 1.e-3
 
-scheduler:
-  factor: 0.2
-  patience: 2
-  verbose: True
-  cooldown: 8
+scheduler: null
 
 branch:
   default:
     scheduler: null
   M: 
     optimizer:
-      - Adam
-      - lr: 1.e-3
-        weight_decay: 1.0e-3
+      lr: 4.e-3
+      weight_decay: 1.0e-3
     scheduler: 
       factor: 0.98
       patience: 2
       cooldown: 2
-      verbose: False
   B:
     scheduler: null
   discriminator:
@@ -47,10 +41,10 @@ branch:
 
 dataloader:
   training:
-    batch_size: 12
+    batch_size: 10
     shuffle: True
   scoring:
-    batch_size: 12
+    batch_size: 16
     
 paths:
   model_dir: model/toynetv1/ynet

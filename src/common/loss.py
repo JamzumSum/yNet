@@ -12,32 +12,42 @@ from torch import Tensor
 transequal = lambda x: x == x.T
 
 
-def focalCE(P, Y, gamma=2.0, *args, **argv):
-    """
-    focal loss for classification. nll_loss implement
-    - P: [N, K] NOTE: not softmax-ed
-    - Y: [N]    NOTE: long
-    - gamma: 
-    """
-    pt = P
-    gms = (1 - pt) ** gamma  # [N, K]
-    return F.nll_loss(gms * pt.log(), Y, *args, **argv)
+def smoothed_label(target, smoothing=0.0, K=-1):
+    assert 0 <= smoothing <= 0.5
+    onehot = F.one_hot(target, num_classes=K).bool()
+    one = 1.0 - smoothing
+    zero = smoothing / (K - 1)
+    true_dist = torch.empty_like(onehot, dtype=torch.float).fill_(zero)
+    true_dist[onehot] = one
+    return true_dist
 
 
-def focalBCE(P, Y, gamma=2.0, *args, **argv):
+def _reduct(r, reduction):
+    if reduction == "none":
+        return r
+    elif reduction == "sum":
+        return r.sum()
+    elif reduction == "mean":
+        return r.mean()
+    else:
+        raise ValueError(reduction)
+
+
+def focal_smooth_loss(P, Y, gamma=2.0, smooth=0., weight=None, reduction='mean'):
     """
-    focal loss for classification. BCELoss implement
-    - P: [N, K] NOTE: not softmax-ed when K != 1
-    - Y: [N]    NOTE: long
-    - gamma: 
+    focal loss combined with label smoothing.
+        P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
+        Y: [N]    NOTE: int
+        gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
+        smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
+    other args are like those in cross_entropy.
     """
-    # NOTE: softmax is troubling for both branches.
-    # ADD: softmax is now forbiddened.
-    Y = F.one_hot(Y, num_classes=P.size(1)).float()
-    bce = F.binary_cross_entropy(P, Y, reduction="none", *args, **argv)
+    K = P.size(1)
+    YK = smoothed_label(Y, smooth, K)
+    bce = F.binary_cross_entropy(P, YK, weight=weight, reduction="none")
     pt = torch.exp(-bce)  # [N, K]
     gms = (1 - pt) ** gamma  # [N, K]
-    return (gms * bce).mean()
+    return _reduct(gms * bce, reduction)
 
 
 def _pairwise_distance(embeddings, squared=False):
@@ -146,20 +156,10 @@ class SemiHardTripletLoss(torch.nn.Module):
         return semihard_triplet_loss(label, embedding, self.margin)
 
 
-def diceCoefficient(p, gt, eps=1e-5, activation="none", reduction="mean"):
+def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     r""" computational formula：
         dice = (2 * tp) / (2 * tp + fp + fn)
     """
-
-    if activation is None or activation == "none":
-        pass
-    elif activation == "sigmoid":
-        p = torch.sigmoid(p)
-    elif activation == "softmax2d":
-        p = F.softmax(p, 1)
-    else:
-        raise ValueError(activation)
-
     N = gt.size(0)
     pflat = p.view(N, -1)
     gt_flat = gt.view(N, -1)

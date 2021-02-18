@@ -89,7 +89,7 @@ class UNetWOHeader(nn.Module):
             conv = ConvStack2(cc * 2, cc, res=inner_res)
             cc = conv.oc
             self.add_module('U%d' % (i + 1), usample)
-            self.add_module('L%d' % (i + 6), conv)
+            self.add_module('L%d' % (i + self.level + 2), conv)
         
 
     def add_module(self, name, model):

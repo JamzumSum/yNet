@@ -3,7 +3,7 @@ from unittest import TestCase
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.loss import focalBCE, SemiHardTripletLoss
+from common.loss import focal_smooth_loss, SemiHardTripletLoss
 from toynet.toynetv1 import ToyNetV1
 
 
@@ -40,7 +40,7 @@ class FocalTest(TestCase):
         P = P.requires_grad_(True)
 
         Y = torch.zeros(4).long()
-        loss = focalBCE(P, Y, K=2)
+        loss = focal_smooth_loss(P, Y, smooth=.1)
 
         op = torch.optim.SGD((P,), lr=1)
         loss.backward()

@@ -5,7 +5,9 @@ from data.augment import ElasticAugmentSet, augmentWith
 from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
+from rich.traceback import install
 
+install()
 td, vd = classSpecSplit(
     DistributedConcatSet([
         CachedDatasetGroup('./data/set2/set2.pt'), 

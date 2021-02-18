@@ -4,5 +4,6 @@
 /log
 /doc
 /data
+/model
 
 __pycache__

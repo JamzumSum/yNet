@@ -57,9 +57,9 @@ def makecache(inpath, outpath, name, datasets, title, statTitle=[]):
             if t in dic:
                 if t in statdic:
                     for p in dic[t]: statdic[t][p] += 1
-                dic[t] = torch.LongTensor(dic[t])
+                dic[t] = torch.IntTensor(dic[t])
     for k, v in statdic.items():
-        statdic[k] = torch.LongTensor([v[p] for p in range(max(v) + 1)])
+        statdic[k] = torch.IntTensor([v[p] for p in range(max(v) + 1)])
                 
     torch.save(
         {

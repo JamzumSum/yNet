@@ -10,6 +10,7 @@ import os
 import torch
 from tensorboardX import SummaryWriter
 from collections import defaultdict
+from rich.progress import Progress
 
 class Trainer:
     cur_epoch = 0
@@ -28,6 +29,8 @@ class Trainer:
         self.model_conf = conf.get('model', {})
 
         self.net = Net(**self.model_conf)
+        self.progress = Progress(transient=True)
+
         try: self.load(self.training.get('load_from', 'latest'))
         except ValueError as e:
             print(e)
@@ -105,3 +108,7 @@ class Trainer:
         param = self.net.named_parameters()
         for name, p in param:
             self.board.add_histogram('network/' + name, p, self.cur_epoch)
+
+    def __del__(self):
+        self.progress.stop()
+        self.board.close()
