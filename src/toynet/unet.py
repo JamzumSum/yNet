@@ -39,14 +39,13 @@ class ConvStack2(nn.Module, ChannelInference):
         else: X = self.CB(X)
         return torch.relu(X)
 
-class DownConv(nn.Conv2d, ChannelInference):
+class DownConv(nn.MaxPool2d, ChannelInference):
     '''
     [N, C, H, W] -> [N, C, H//2, W//2]
     '''
     def __init__(self, ic):
-        nn.Conv2d.__init__(self, ic, ic, 2, 2, bias=False)
+        nn.MaxPool2d.__init__(self, 2, 2)
         ChannelInference.__init__(self, ic, ic)
-        torch.nn.init.constant_(self.weight, 0.25)
 
 class UpConv(nn.Sequential, ChannelInference):
     '''
@@ -95,7 +94,8 @@ class UNetWOHeader(nn.Module):
     def add_module(self, name, model):
         return nn.Module.add_module(self, name, self.cps(model))
 
-    def _padCat(self, X, Y):
+    @staticmethod
+    def _padCat(X, Y):
         '''
         Pad Y and concat with X.
         X: [N, C, H_max, W_max]
@@ -147,11 +147,11 @@ class UNet(UNetWOHeader):
         for i, f in enumerate(self.headers): self.add_module("header %d" % (i + 1), f)
         self.sigma = nn.Sigmoid()
 
-    def forward(self, X, expand=True):
+    def forward(self, X, expand: bool=True)-> tuple:
         bottomx, finalx = UNetWOHeader.forward(self, X, expand)
-        if not expand: return (bottomx, *(None for f in self.headers))
+        if not expand: return (bottomx, *[None for f in self.headers])
 
-        act = (self.sigma(f(finalx)) for f in self.headers)
+        act = [self.sigma(f(finalx)) for f in self.headers]
         return (bottomx, *act)
 
 if __name__ == "__main__":

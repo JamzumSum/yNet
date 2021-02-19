@@ -5,17 +5,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+@torch.jit.script
 def freeze(tensor, f=0.0):
+    # type: (Tensor, float) -> Tensor
     return (1 - f) * tensor + f * tensor.detach()
 
 
+@torch.jit.script
 def unsqueeze_as(s, t, dim=-1):
+    # type: (Tensor, Tensor, int) -> Tensor
     while s.dim() < t.dim():
         s = s.unsqueeze(dim)
     return s
 
 
+@torch.jit.script
 def gray2JET(x, thresh=0.5):
+    # type: (Tensor, float) -> Tensor
     """
     - x: [..., H, W],       NOTE: float 0~1
     - O: [..., 3, H, W],    NOTE: BGR, float 0~1
@@ -239,7 +245,7 @@ class _ReduceLROnPlateauSub(torch.optim.lr_scheduler.ReduceLROnPlateau):
         torch.optim.lr_scheduler.ReduceLROnPlateau.__init__(self, *args, **argv)
 
     def _reduce_lr(self, epoch):
-        param_group = self.optimizer.parameter_groups[self.idx]
+        param_group = self.optimizer.param_groups[self.idx]
         old_lr = float(param_group["lr"])
         new_lr = max(old_lr * self.factor, self.min_lrs[self.idx])
         if old_lr - new_lr > self.eps:
@@ -275,10 +281,10 @@ class ReduceLROnPlateau:
             else _ReduceLROnPlateauSub(
                 i,
                 optimizer,
-                mode=ld(arg, 'mode'),
+                mode=ld(arg, "mode"),
                 factor=ld(arg, "factor"),
                 patience=ld(arg, "patience"),
-                threshold=ld(arg, 'threshold'),
+                threshold=ld(arg, "threshold"),
                 threshold_mode=ld(arg, "threshold_mode"),
                 cooldown=ld(arg, "cooldown"),
                 min_lr=ld(arg, "min_lr"),
@@ -292,5 +298,10 @@ class ReduceLROnPlateau:
         ld = lambda l, i: l[i] if isinstance(l, (list, tuple)) else l
 
         for i, sg in enumerate(self.sub):
-            if sg: sg.step(ld(metrics, i))
+            if sg:
+                sg.step(ld(metrics, i))
 
+    def setepoch(epoch):
+        self.last_epoch = epoch
+        for sg in self.sub:
+            if sg: sg.last_epoch = epoch

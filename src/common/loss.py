@@ -13,8 +13,9 @@ transequal = lambda x: x == x.T
 
 
 def smoothed_label(target, smoothing=0.0, K=-1):
-    assert 0 <= smoothing <= 0.5
-    onehot = F.one_hot(target, num_classes=K).bool()
+    # type: (Tensor, float, int) -> Tensor
+    assert 0. <= smoothing <= 0.5
+    onehot = F.one_hot(target, num_classes=K)
     one = 1.0 - smoothing
     zero = smoothing / (K - 1)
     true_dist = torch.empty_like(onehot, dtype=torch.float).fill_(zero)
@@ -22,7 +23,7 @@ def smoothed_label(target, smoothing=0.0, K=-1):
     return true_dist
 
 
-def _reduct(r, reduction):
+def _reduct(r, reduction: str):
     if reduction == "none":
         return r
     elif reduction == "sum":
@@ -33,7 +34,9 @@ def _reduct(r, reduction):
         raise ValueError(reduction)
 
 
-def focal_smooth_loss(P, Y, gamma=2.0, smooth=0., weight=None, reduction='mean'):
+@torch.jit.script
+def focal_smooth_loss(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
+    # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
     """
     focal loss combined with label smoothing.
         P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.

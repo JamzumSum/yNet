@@ -27,12 +27,13 @@ class BIRADsUNet(nn.Module):
         width=64,
         ulevel=4,
         ylevel=1,
+        dropout=0.2,
         memory_trade=False,
         zero_init_residual=True,
     ):
         nn.Module.__init__(self)
         self.unet = UNet(
-            ic=in_channel + 1,
+            ic=in_channel,
             oc=1,
             fc=width,
             level=ulevel,
@@ -55,17 +56,15 @@ class BIRADsUNet(nn.Module):
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
         self.mfc = nn.Linear(cc, 2)
         self.bfc = nn.Linear(cc, K)
+        self.dropout = nn.Dropout(dropout)
         self.initParameter()
 
     def initParameter(self, zero_init_residual=False):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                if isinstance(m, DownConv):
-                    nn.init.constant_(m.weight, 0.25)
-                else:
-                    nn.init.kaiming_normal_(
-                        m.weight, mode="fan_out", nonlinearity="relu"
-                    )
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_out", nonlinearity="relu"
+                )
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -74,31 +73,22 @@ class BIRADsUNet(nn.Module):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(self, X, mask=None, segment=True, classify=True):
+    def forward(self, X, segment=True, classify=True):
         """
         X: [N, ic, H, W]
-        mask: [N, 1, H, W]
-            NOTE: Do NOT pass mask when segment=True for it's a LEAK of ground-truth.
-            `mask` is only a guidance for classifying path(ypath).
         return: 
             segment map           [N, 2, H, W]
             x: bottom of unet feature. [N, fc * 2^level]
             Pm        [N, 2]
             Pb        [N, K]
         """
-        N = X.size(0)
         assert segment or classify, "hello? :D"
-        if mask is None:
-            mask = torch.zeros((N, 1, *X.shape[2:]), device=X.device)
-        else:
-            assert not segment, "ground-truth leaking!"
-
-        X = torch.cat((X, mask), dim=1)
         c, segment = self.unet(X, segment)
         if self.ylevel:
             c = self.ypath(c)
         x = self.pool(c).squeeze(2).squeeze(2)  # [N, fc * 2^(level + ylevel)]
         if classify:
+            x = self.dropout(x)
             Pm = F.softmax(self.mfc(x), dim=1)  # [N, 2]
             Pb = F.softmax(self.bfc(x), dim=1)  # [N, K]
             return segment, x, Pm, Pb
@@ -146,43 +136,30 @@ class ToyNetV1(BIRADsUNet):
 
         res = self.forward(X, segment=mask is not None)
         seg, embed, Pm, Pb = res
-        guide_pm = guide_pb = None
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
         loss = {}
 
-        if torch.rand(1) < 0.5 + piter:
-            # allow mask guidance
-            if torch.rand(1) < piter ** 4:
-                # use segment result instead of ground-truth
-                _, _, guide_pm, guide_pb = self.forward(X, mask=seg, segment=False)
-            elif mask is not None:
-                # use ground-truth as guidance
-                _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
+        # if torch.rand(1) < 0.5 + piter:
+        #     # allow mask guidance
+        #     if torch.rand(1) < piter ** 4:
+        #         # use segment result instead of ground-truth
+        #         _, _, guide_pm, guide_pb = self.forward(X, mask=seg, segment=False)
+        #     elif mask is not None:
+        #         # use ground-truth as guidance
+        #         _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
             
 
-        loss["pm"] = focal_smooth_loss(Pm, Ym, gamma=1 + piter, weight=self.mweight)
-        if guide_pm is not None:
-            gmloss = focal_smooth_loss(guide_pm, Ym, gamma=1 + piter, weight=self.mweight)
-            loss['pm'] = (loss['pm'] + gmloss) / 2
-            # guidance consistancy loss
-            loss["gcm"] = freeze(
-                F.kl_div(Pm.log(), guide_pm, reduction="batchmean"),
-                gmloss.detach().clamp(0, 1),
-            )
+        loss["pm"] = F.cross_entropy(
+            Pm, Ym, weight=self.mweight,
+            # gamma=1 + piter
+        )
         
         if seg is not None:
-            loss["seg"] = ((seg - mask) ** 2 * (mask + 1)).mean()
+            loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
 
         if Yb is not None:
             loss["pb"] = focal_smooth_loss(Pb, Yb, gamma=1 + piter, weight=self.bweight)
-            if guide_pb is not None:
-                gbloss = focal_smooth_loss(guide_pm, Ym, gamma=1 + piter, weight=self.mweight)
-                loss['pb'] = (loss['pb'] + gbloss) / 2
-                loss["gcb"] = freeze(
-                    F.kl_div(Pb.log(), guide_pb, reduction="batchmean"),
-                    gbloss.detach().clamp(0, 1),
-                )
 
         # mcount = torch.bincount(Ym)
         # if len(mcount) == 2 and mcount[0] > 0:
@@ -197,8 +174,6 @@ class ToyNetV1(BIRADsUNet):
             "tm": "m/triplet",
             "seg": "segment-mse",
             "pb": "b/CE",
-            'gcm': 'm/mask-guidance-consist',
-            'gcb': 'b/mask-guidance-consist',
             # 'tb': 'b/triplet'
         }
         cum_loss = 0

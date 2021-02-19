@@ -67,6 +67,31 @@ class AugmentSet(VirtualDataset, ABC):
     @property
     def meta(self): return self.dataset.meta
 
+
+@torch.jit.script
+def elastic(X, kernel, padding, alpha=34.):
+    # type: (Tensor, Tensor, int, float) -> Tensor
+    '''
+    X: [C, H, W]
+    '''
+    X = X.unsqueeze(0)
+    H, W = X.shape[-2:]
+
+    dx = torch.rand(X.shape[-2:], device=kernel.device) * 2 - 1
+    dy = torch.rand(X.shape[-2:], device=kernel.device) * 2 - 1
+    
+    xgrid = torch.arange(W, device=dx.device).repeat(H, 1)
+    ygrid = torch.arange(H, device=dy.device).repeat(W, 1).T
+    with torch.no_grad():
+        dx = alpha * F.conv2d(unsqueeze_as(dx, X, 0), kernel, bias=None, padding=padding)
+        dy = alpha * F.conv2d(unsqueeze_as(dy, X, 0), kernel, bias=None, padding=padding)
+    H /= 2; W /= 2
+    dx = (dx + xgrid - W) / W
+    dy = (dy + ygrid - H) / H
+    grid = torch.stack((dx.squeeze(1), dy.squeeze(1)), dim=-1)
+    return F.grid_sample(X, grid, padding_mode='reflection', align_corners=False).squeeze(0)
+
+
 class ElasticAugmentSet(AugmentSet):
     '''
     Elastic deformation w/o random affine.
@@ -82,10 +107,27 @@ class ElasticAugmentSet(AugmentSet):
         """
         AugmentSet.__init__(self, dataset, distrib_title, aim_size)
         self.alpha = alpha
-        self.filter = self.getFilter(sigma)
+        self.filter, self.padding = self.getFilter(sigma)
+        self.gpu = torch.cuda.is_available()
+        if self.gpu:
+            self.filter = self.filter.cuda()
 
     def deformation(self, item):
-        item['X'] = self.elastic(item['X'], self.filter, self.alpha)
+        if self.gpu:
+            item['X'] = item['X'].cuda()
+            if 'mask' in item:
+                item['mask'] = item['mask'].cuda()
+        if 'mask' in item: 
+            N = item['X'].size(0)
+            X = torch.cat((item['X'], item['mask']), dim=0)
+        else: X = item['X']
+
+        X = elastic(X, self.filter, self.padding, self.alpha)
+
+        if 'mask' in item:
+            item['mask'] = X[N:]
+            X = X[:N]
+        item['X'] = X
         return item
 
     @staticmethod
@@ -96,30 +138,8 @@ class ElasticAugmentSet(AugmentSet):
         kernel = kernel @ kernel.T
         kernel = torch.from_numpy(kernel)
         kernel = kernel.unsqueeze_(0).unsqueeze_(0)
-        return lambda x: F.conv2d(x, kernel, bias=None, padding=padding)
+        return kernel, padding
         
-    @staticmethod
-    def elastic(X, gaussian_filter, alpha=34):
-        '''
-        X: [C, H, W]
-        '''
-        X = X.unsqueeze(0)
-        H, W = X.shape[-2:]
-
-        uniform = torch.distributions.Uniform(-1, 1)
-        dx = uniform.sample(X.shape[-2:])
-        dy = uniform.sample(X.shape[-2:])
-        
-        xgrid = torch.arange(W).repeat(H, 1)
-        ygrid = torch.arange(H).repeat(W, 1).T
-        with torch.no_grad():
-            dx = alpha * gaussian_filter(unsqueeze_as(dx, X, 0))
-            dy = alpha * gaussian_filter(unsqueeze_as(dy, X, 0))
-        H /= 2; W /= 2
-        dx = (dx + xgrid - W) / W
-        dy = (dy + ygrid - H) / H
-        grid = torch.stack((dx.squeeze(1), dy.squeeze(1)), dim=-1)
-        return F.grid_sample(X, grid, padding_mode='reflection', align_corners=False).squeeze(0)
 
 def augmentWith(dataset: Distributed, aug_class, distrib_title, aim_size, tag=None, *args, **argv):
     meta = dataset.meta

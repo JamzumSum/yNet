@@ -24,7 +24,9 @@ class Trainer:
 
         self.paths = conf.get('paths', {})
         self.training = conf.get('training', {})
-        self.op_conf = conf.get('optimizer', ('SGD', {}))
+        op_conf: list = conf.get('optimizer', ('SGD', {}))
+        self.op_name = op_conf[0]
+        self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
         self.dataloader = defaultdict(dict, conf.get('dataloader', {}))
         self.model_conf = conf.get('model', {})
 
@@ -66,7 +68,7 @@ class Trainer:
         vconf = {
             'cur_epoch': self.cur_epoch, 
             'total_batch': self.total_batch, 
-            'best_mark': score if score else self.best_mark
+            'best_mark': score.item() if score else self.best_mark
         }
 
         os.makedirs(self.model_dir, exist_ok=True)
@@ -84,11 +86,12 @@ class Trainer:
 
         state, newconf, vonf, score = torch.load(path)
 
-        print(score)
         self.net.load_state_dict(state)
         self.solveConflict(newconf)
 
         for k, v in vonf.items(): setattr(self, k, v)
+        print('epoch %d, score' % self.cur_epoch, score)
+        self.cur_epoch += 1
         return True
 
     def solveConflict(self, newConf):

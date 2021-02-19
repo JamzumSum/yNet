@@ -2,8 +2,8 @@ model:      # model constructor
   in_channel: 1
   K: 6      # 2, 3, 4a, 4b, 4c, 5
   width: 16
-  ulevel: 4
-  ylevel: 1   # for (512, 512) image, unet level + ypath level <= 8
+  ulevel: 3
+  ylevel: 2   # for (512, 512) image, unet level + ypath level <= 8
   memory_trade: True
 
 # training strategy
@@ -15,8 +15,7 @@ training:
   use_annotation_from: 0
 
 optimizer:
-  - Adam
-  - lr: 1.e-3
+  - AdamW
 
 scheduler: null
 

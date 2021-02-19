@@ -55,7 +55,7 @@ class ToyNetTrainer(Trainer):
         d = self.conf.get("branch", {})
         branch_conf = {branch: d.get(branch, {}) for branch in branches}
         op_arg = {
-            k: d.get("optimizer", self.op_conf[1]) for k, d in branch_conf.items()
+            k: d.get("optimizer", self.op_conf) for k, d in branch_conf.items()
         }
         sg_arg = {k: d.get("scheduler", self.sg_conf) for k, d in branch_conf.items()}
         if self.sg_conf is not None:
@@ -68,8 +68,14 @@ class ToyNetTrainer(Trainer):
             d = sg_arg.pop("default")
             sg_arg["M"], sg_arg["B"] = d, d
 
-        OP: torch.optim.Optimizer = getattr(torch.optim, self.op_conf[0])
-        weight_decay = {k: d.get("weight_decay", 0) for k, d in op_arg.items()}
+        OP: torch.optim.Optimizer = getattr(torch.optim, self.op_name)
+        if True:
+            argls: list = OP.__init__.__code__.co_varnames[:OP.__init__.__code__.co_argcount]
+            assert 'weight_decay' in argls
+            default_decay = OP.__init__.__defaults__[argls.index('weight_decay') - len(argls)]
+            weight_decay = {k: d.get("weight_decay", default_decay) for k, d in op_arg.items()}
+        else:
+            weight_decay = {k: False for k, d in op_arg.items()}
 
         paramdic = self.net.parameter_groups(weight_decay)
         param_group = []
@@ -77,18 +83,19 @@ class ToyNetTrainer(Trainer):
         for k, v in op_arg.items():
             d = {"params": paramdic[k]}
             d.update(v)
-            d["initial_lr"] = v.get("lr", 1e-3)
+            v.setdefault('lr', self.op_conf.get('lr', 1e-3))
+            d["initial_lr"] = v['lr']
             param_group.append(d)
             param_group_key.append(k)
             if weight_decay[k]:
                 d = {"params": paramdic[k + "_no_decay"]}
                 d.update(v)
-                d["initial_lr"] = v.get("lr", 1e-3)
-                d.pop("weight_decay")
+                d["initial_lr"] = v['lr']
+                d["weight_decay"] = 0.
                 param_group.append(d)
                 param_group_key.append(k)
 
-        optimizer = OP(param_group, **self.op_conf[1])
+        optimizer = OP(param_group, **self.op_conf)
 
         if not any(sg_arg.values()):
             return optimizer, None
@@ -153,6 +160,7 @@ class ToyNetTrainer(Trainer):
         else:
             assert torch.cuda.is_available()
             torch.cuda.reset_peak_memory_stats()
+            # torch.backends.cudnn.benchmark = True
 
         trainWithDataset = Batched(self.trainInBatch)
 
@@ -166,6 +174,10 @@ class ToyNetTrainer(Trainer):
             warmsg = torch.optim.lr_scheduler.LambdaLR(
                 gop if self.cur_epoch < self.discardYbEpoch else mop, warmlambda
             )
+            if self.cur_epoch == 0:
+                # zero grad step to avoid warning. :(
+                warmsg.optimizer.zero_grad()
+                warmsg.optimizer.step()
 
         for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
             # change optimizer and lr warmer
@@ -183,21 +195,33 @@ class ToyNetTrainer(Trainer):
                 warmsg.step()
             elif self.cur_epoch == 5:
                 del warmsg, warmlambda
+                if gsg: gsg.setepoch(5)
+                if msg: msg.setepoch(5)
+
+            tid = [
+                self.progress.add_task(
+                    "epoch T%03d" % self.cur_epoch,
+                    total=(len(td) << int(self.adversarial)),
+                ),
+                self.progress.add_task("epoch V%03d" % self.cur_epoch, total=len(vd)),
+                self.progress.add_task(
+                    "score T%03d" % self.cur_epoch, total=len(no_aug) + 2
+                ),
+                self.progress.add_task(
+                    "score V%03d" % self.cur_epoch, total=len(vd) + 2
+                ),
+            ]
             # set training flag
             self.net.train()
 
-            tid = self.progress.add_task(
-                "epoch T%03d" % self.cur_epoch, total=(len(td) << int(self.adversarial))
-            )
             res = trainWithDataset(
                 loader,
                 name="ourset",
                 op=gop if self.cur_epoch < self.discardYbEpoch else mop,
                 dop=dop,
-                barstep=lambda s: self.progress.update(tid, advance=s),
+                barstep=lambda s: self.progress.update(tid[0], advance=s),
             )
-            self.progress.stop_task(tid)
-            self.progress.remove_task(tid)
+            self.progress.stop_task(tid[0])
             if self.adversarial:
                 tll, dll = res
                 dll = dll.mean()
@@ -205,51 +229,50 @@ class ToyNetTrainer(Trainer):
                 (tll,) = res
             tll = tll.mean()
 
-            tid = self.progress.add_task("epoch V%03d" % self.cur_epoch, total=len(vd))
+            # fatal: set eval when testing and validating
+            self.net.eval()
             vll = trainWithDataset(
-                vloader, barstep=lambda s: self.progress.update(tid, advance=s)
+                vloader, barstep=lambda s: self.progress.update(tid[1], advance=s)
             )
             vll = torch.cat(vll).mean()
-            self.progress.stop_task(tid)
-            self.progress.remove_task(tid)
+            self.progress.stop_task(tid[1])
             ll = (tll + vll) / 2
 
             if dsg:
                 dsg.step(dll)
             if self.cur_epoch < self.discardYbEpoch:
-                if self.cur_epoch <= 5 and gsg:
+                if self.cur_epoch >= 5 and gsg:
                     gsg.step(ll)
             else:
-                if self.cur_epoch <= 5 and msg:
+                if self.cur_epoch >= 5 and msg:
                     msg.step(ll)
 
-            merr = self.score("trainset", no_aug)[0]  # trainset score
-            merr = self.score("validation", vd)[0]  # validation score
+            merr = self.score("trainset", no_aug, tid[2])[0]  # trainset score
+            merr = self.score("validation", vd, tid[3])[0]  # validation score
             self.traceNetwork()
 
             if merr < self.best_mark:
-                self.best_mark = merr
+                self.best_mark = merr.item()
                 self.save("best", merr)
             self.save("latest", merr)
 
+            for i in tid:
+                self.progress.remove_task(i)
+
     @NoGrad
-    def score(self, caption, dataset, thresh=0.5):
+    def score(self, caption, dataset, tid, thresh=0.5):
         """
         Score and evaluate the given dataset.
         """
         self.net.eval()
-        tid = self.progress.add_task("score %03d" % self.cur_epoch, total=len(dataset) + 2)
 
         def scoresInBatch(X, Ym, Yb=None, mask=None):
             seg, embed, Pm, Pb = self.net(X)
-            _, _, guide_pm, guide_pb = self.net(X, mask=seg, segment=False)
             self.progress.update(tid, advance=len(X))
 
             res = {
                 "pm": Pm,
                 "pb": Pb,
-                "gpm": guide_pm,
-                "gpb": guide_pb,
                 "ym": Ym,
                 "c": embed,
             }
@@ -288,7 +311,6 @@ class ToyNetTrainer(Trainer):
         errl = []
         items = {
             "B-M": ("pm", "ym"),
-            "Guided B-M": ("gpm", "ym"),
             "BIRAD": ("pb", "yb"),
             "discrim": ("cy", "cy-GT"),
         }
@@ -303,16 +325,24 @@ class ToyNetTrainer(Trainer):
                 argp = p.argmax(dim=1)
             err = (argp != y).float().mean()
             self.board.add_scalar("err/%s/%s" % (k, caption), err, self.cur_epoch)
-            self.board.add_histogram(
-                "distribution/%s/%s" % (k, caption), p, self.cur_epoch
-            )
+
             errl.append(err)
 
             if p.dim() == 1:
                 self.board.add_pr_curve("%s/%s" % (k, caption), p, y, self.cur_epoch)
+                self.board.add_histogram(
+                    "distribution/%s/%s" % (k, caption), p, self.cur_epoch
+                )
             elif p.dim() == 2 and p.size(1) <= 2:
                 self.board.add_pr_curve(
                     "%s/%s" % (k, caption), p[:, -1], y, self.cur_epoch
+                )
+                self.board.add_histogram(
+                    "distribution/%s/%s" % (k, caption), p[:, -1], self.cur_epoch
+                )
+            else:
+                self.board.add_histogram(
+                    "distribution/%s/%s" % (k, caption), p, self.cur_epoch
                 )
 
         if not (self.logSegmap or self.logHotmap):
@@ -354,5 +384,4 @@ class ToyNetTrainer(Trainer):
 
         self.progress.update(tid, advance=1)
         self.progress.stop_task(tid)
-        self.progress.remove_task(tid)
         return errl

@@ -81,7 +81,5 @@ class FixLoader(DataLoader):
         if self.drop_last:
             x = self.augmentFromBatch(x, N)
 
-        x = {k: torch.stack([i[k] for i in x]) for k in x[0]}
-        if self.device: 
-            for k, v in x.items(): x[k] = v.to(self.device)
+        x = {k: torch.stack([i[k].to(self.device) for i in x]) for k in x[0]}
         return x
