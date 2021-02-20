@@ -301,7 +301,7 @@ class ReduceLROnPlateau:
             if sg:
                 sg.step(ld(metrics, i))
 
-    def setepoch(epoch):
+    def setepoch(self, epoch):
         self.last_epoch = epoch
         for sg in self.sub:
             if sg: sg.last_epoch = epoch

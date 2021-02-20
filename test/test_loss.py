@@ -16,10 +16,10 @@ class FocalTest(TestCase):
         Y = torch.randint(self.K, (3,))
         mask = F.one_hot(Y, num_classes=self.K).float()
         sP = P.sigmoid()
-        man = mask * sP.log() + (1 - mask) * (1 - sP).log()
-        man = -man * weight
+        logpt = mask * sP.log() + (1 - mask) * (1 - sP).log()
+        logpt = -logpt * weight
         tim = F.binary_cross_entropy(sP, mask, reduction='none', weight=weight)
-        self.assertTrue(torch.all(man == tim))
+        self.assertTrue(torch.all(logpt == tim))
 
     def testBCEwithLogits(self):
         weight = torch.Tensor([.1, .1, .1, .2, .2, .3])

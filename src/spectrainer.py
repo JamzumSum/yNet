@@ -48,15 +48,12 @@ class ToyNetTrainer(Trainer):
         branch: 
         - default
         - M, B
-        - discriminator
         """
         if self.adversarial:
             branches.append("discriminator")
         d = self.conf.get("branch", {})
         branch_conf = {branch: d.get(branch, {}) for branch in branches}
-        op_arg = {
-            k: d.get("optimizer", self.op_conf) for k, d in branch_conf.items()
-        }
+        op_arg = {k: d.get("optimizer", self.op_conf) for k, d in branch_conf.items()}
         sg_arg = {k: d.get("scheduler", self.sg_conf) for k, d in branch_conf.items()}
         if self.sg_conf is not None:
             sg_arg = {
@@ -70,10 +67,16 @@ class ToyNetTrainer(Trainer):
 
         OP: torch.optim.Optimizer = getattr(torch.optim, self.op_name)
         if True:
-            argls: list = OP.__init__.__code__.co_varnames[:OP.__init__.__code__.co_argcount]
-            assert 'weight_decay' in argls
-            default_decay = OP.__init__.__defaults__[argls.index('weight_decay') - len(argls)]
-            weight_decay = {k: d.get("weight_decay", default_decay) for k, d in op_arg.items()}
+            argls: list = OP.__init__.__code__.co_varnames[
+                : OP.__init__.__code__.co_argcount
+            ]
+            assert "weight_decay" in argls
+            default_decay = OP.__init__.__defaults__[
+                argls.index("weight_decay") - len(argls)
+            ]
+            weight_decay = {
+                k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
+            }
         else:
             weight_decay = {k: False for k, d in op_arg.items()}
 
@@ -83,24 +86,27 @@ class ToyNetTrainer(Trainer):
         for k, v in op_arg.items():
             d = {"params": paramdic[k]}
             d.update(v)
-            v.setdefault('lr', self.op_conf.get('lr', 1e-3))
-            d["initial_lr"] = v['lr']
+            v.setdefault("lr", self.op_conf.get("lr", 1e-3))
+            d["initial_lr"] = v["lr"]
             param_group.append(d)
             param_group_key.append(k)
             if weight_decay[k]:
                 d = {"params": paramdic[k + "_no_decay"]}
                 d.update(v)
-                d["initial_lr"] = v['lr']
-                d["weight_decay"] = 0.
+                d["initial_lr"] = v["lr"]
+                d["weight_decay"] = 0.0
                 param_group.append(d)
                 param_group_key.append(k)
 
         optimizer = OP(param_group, **self.op_conf)
+        if self.training.get("continue", True):
+            optimizer.load_state_dict(self._op_state_dict[tuple(branches)])
 
         if not any(sg_arg.values()):
             return optimizer, None
 
         scheduler = ReduceLROnPlateau(optimizer, [sg_arg[k] for k in param_group_key])
+        scheduler.setepoch(self.cur_epoch)
         return optimizer, scheduler
 
     def trainInBatch(
@@ -195,8 +201,10 @@ class ToyNetTrainer(Trainer):
                 warmsg.step()
             elif self.cur_epoch == 5:
                 del warmsg, warmlambda
-                if gsg: gsg.setepoch(5)
-                if msg: msg.setepoch(5)
+                if gsg:
+                    gsg.setepoch(5)
+                if msg:
+                    msg.setepoch(5)
 
             tid = [
                 self.progress.add_task(
@@ -251,12 +259,16 @@ class ToyNetTrainer(Trainer):
             merr = self.score("validation", vd, tid[3])[0]  # validation score
             self.traceNetwork()
 
+            opdic = ['default'] if self.cur_epoch < self.discardYbEpoch else ['M', 'B']
+            if self.adversarial: opdic.append('discriminator')
+            opdic = {tuple(opdic): gop if self.cur_epoch < self.discardYbEpoch else mop}
+            
             if merr < self.best_mark:
                 self.best_mark = merr.item()
-                self.save("best", merr)
-            self.save("latest", merr)
+                self.save("best", opdic)
+            self.save("latest", opdic)
 
-            for i in tid:
+            for i in self.progress.task_ids:
                 self.progress.remove_task(i)
 
     @NoGrad

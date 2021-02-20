@@ -14,13 +14,11 @@ transequal = lambda x: x == x.T
 
 def smoothed_label(target, smoothing=0.0, K=-1):
     # type: (Tensor, float, int) -> Tensor
-    assert 0. <= smoothing <= 0.5
-    onehot = F.one_hot(target, num_classes=K)
+    assert 0.0 <= smoothing <= 0.5
     one = 1.0 - smoothing
     zero = smoothing / (K - 1)
-    true_dist = torch.empty_like(onehot, dtype=torch.float).fill_(zero)
-    true_dist[onehot] = one
-    return true_dist
+    onehot = F.one_hot(target, num_classes=K)
+    return onehot.float().clamp_(zero, one)
 
 
 def _reduct(r, reduction: str):
@@ -35,10 +33,10 @@ def _reduct(r, reduction: str):
 
 
 @torch.jit.script
-def focal_smooth_loss(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
+def focal_smooth_bce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
     # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
     """
-    focal loss combined with label smoothing.
+    focal bce combined with label smoothing.
         P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
         Y: [N]    NOTE: int
         gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
@@ -51,6 +49,26 @@ def focal_smooth_loss(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"
     pt = torch.exp(-bce)  # [N, K]
     gms = (1 - pt) ** gamma  # [N, K]
     return _reduct(gms * bce, reduction)
+
+
+@torch.jit.script
+def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
+    # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
+    """
+    focal ce combined with label smoothing.
+        P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
+        Y: [N]    NOTE: int
+        gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
+        smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
+    other args are like those in cross_entropy.
+    """
+    K = P.size(1)
+    a = weight[Y]  # [N]
+    YK = smoothed_label(Y, smooth, K)
+    pt = (YK * P).sum(dim=1)  # [N]
+    gms = (1 - pt) ** gamma  # [N, K]
+    assert torch.all(pt > 0)
+    return _reduct(a * gms * pt.log(), reduction)
 
 
 def _pairwise_distance(embeddings, squared=False):
@@ -159,7 +177,9 @@ class SemiHardTripletLoss(torch.nn.Module):
         return semihard_triplet_loss(label, embedding, self.margin)
 
 
+@torch.jit.script
 def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
+    # type: (Tensor, Tensor, float, str) -> Tensor
     r""" computational formula：
         dice = (2 * tp) / (2 * tp + fp + fn)
     """
@@ -171,12 +191,4 @@ def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     FP = torch.sum(pflat, dim=1) - TP
     FN = torch.sum(gt_flat, dim=1) - TP
     dice = (2 * TP + eps) / (2 * TP + FP + FN + eps)
-    if reduction == "sum":
-        return dice.sum()
-    elif reduction == "mean":
-        return dice.mean()
-    elif reduction == "none":
-        return dice
-    else:
-        raise ValueError(reduction)
-
+    return _reduct(dice, reduction)
