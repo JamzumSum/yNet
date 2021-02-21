@@ -9,25 +9,24 @@ from warnings import warn
 
 import torch
 import torch.nn.functional as F
-from progress.bar import Bar
 
-from common.decorators import Batched, NoGrad
 from common.loss import diceCoefficient
-from common.trainer import Trainer, pl
-from common.utils import ConfusionMatrix, ReduceLROnPlateau, gray2JET, unsqueeze_as
-from data.dataloader import FixLoader
+from common.trainer import LightningBase, pl
+from common.utils import ReduceLROnPlateau, gray2JET, unsqueeze_as, deep_merge
 from utils.dict import shallow_update
 
 lenn = lambda x: len(x) if x else 0
 first = lambda it: next(iter(it))
 
 
-class ToyNetTrainer(Trainer):
+class ToyNetTrainer(LightningBase):
     def __init__(self, Net, conf):
-        Trainer.__init__(self, Net, conf)
+        LightningBase.__init__(self, Net, conf)
         self.sg_conf = self.conf.get("scheduler", {})
-        self.discardYbEpoch = self.training.get("use_annotation_from", self.max_epoch)
-        self.flood = self.training.get("flood", 0)
+        self.branch_conf = self.conf.get("branch", {})
+
+        self.discardYbEpoch = self.misc.get("use_annotation_from", self.max_epochs)
+        self.flood = self.misc.get("flood", 0)
 
         support = (
             lambda feature: hasattr(self.net, "support") and feature in self.net.support
@@ -36,82 +35,102 @@ class ToyNetTrainer(Trainer):
         self.adversarial = support("discriminator")
         self.logSegmap = support("segment")
 
-    def configure_optimizers(self):
-        branchgroup = [["M", "B"]]
-        if self.adversarial:
-            branchgroup.append(["discriminator"])
-        ops, sgs = [], []
-        for branches in branchgroup:
-            d = self.conf.get("branch", {})
-            branch_conf = {branch: d.get(branch, {}) for branch in branches}
-            op_arg = {
-                k: d.get("optimizer", self.op_conf) for k, d in branch_conf.items()
-            }
-            sg_arg = {
-                k: d.get("scheduler", self.sg_conf) for k, d in branch_conf.items()
-            }
-            if self.sg_conf is not None:
-                sg_arg = {
-                    k: shallow_update(self.sg_conf, d, True) for k, d in sg_arg.items()
-                }
+        self.test_caption = ["testset", "validation"]
 
-            argls: list = self.op_name.__init__.__code__.co_varnames[
-                : self.op_name.__init__.__code__.co_argcount
+    @property
+    def default_weight_decay(self):
+        argls: list = self.op_name.__init__.__code__.co_varnames[
+            : self.op_name.__init__.__code__.co_argcount
+        ]
+        if "weight_decay" in argls:
+            return self.op_name.__init__.__defaults__[
+                argls.index("weight_decay") - len(argls)
             ]
-            if "weight_decay" in argls:
-                default_decay = self.op_name.__init__.__defaults__[
-                    argls.index("weight_decay") - len(argls)
-                ]
-                weight_decay = {
-                    k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
-                }
-            else:
-                weight_decay = {k: 0.0 for k, d in op_arg.items()}
+        else:
+            return
 
-            paramdic = self.net.parameter_groups(weight_decay)
-            param_group = []
-            param_group_key = []
-            for k, v in op_arg.items():
-                d = {"params": paramdic[k]}
-                d.update(v)
-                v.setdefault("lr", self.op_conf.get("lr", 1e-3))
-                d["initial_lr"] = v["lr"]
-                param_group.append(d)
+    def configure_optimizers(self):
+        branches = ["M", "B"]
+        if self.adversarial:
+            branches.append("discriminator")
+        op_arg, sg_arg = {}, {}
+        for k in branches:
+            d = self.branch_conf.get(k, {})
+            op_arg[k] = d.get("optimizer", self.op_conf)
+            d = d.get("scheduler", self.sg_conf)
+            if self.sg_conf is not None and d is not None:
+                d = shallow_update(self.sg_conf, d, True)
+            sg_arg[k] = d
+
+        default_decay = self.default_weight_decay
+        weight_decay = {
+            k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
+        }
+        paramdic = self.net.parameter_groups(weight_decay)
+
+        param_group_key = []
+        for k, v in op_arg.items():
+            for i, s in enumerate(("", "_no_decay")):
+                if i & 1 and not weight_decay[k]:
+                    continue
                 param_group_key.append(k)
-                if weight_decay[k]:
-                    d = {"params": paramdic[k + "_no_decay"]}
-                    d.update(v)
-                    d["initial_lr"] = v["lr"]
-                    d["weight_decay"] = 0.0
-                    param_group.append(d)
-                    param_group_key.append(k)
+                sk = k + s
+                paramdic[sk] = {"params": paramdic[sk]}
+                paramdic[sk].update(v)
+                paramdic[sk]["initial_lr"] = v.get("lr", self.op_conf.get("lr", 1e-3))
+                if i & 1:
+                    paramdic[sk]["weight_decay"] = 0.0
 
-            optimizer = self.op_name(param_group, **self.op_conf)
-            if self.training.get("continue", True):
-                optimizer.load_state_dict(self._op_state_dict[tuple(branches)])
-            ops.append(optimizer)
+        mop_param_key = ["M", "M_no_decay", "B", "B_no_decay"]
+        mop_param = [paramdic[k] for k in mop_param_key if k in paramdic]
+        mop = self.op_name(mop_param, **self.op_conf)
+        ops = [mop]
+        if self.adversarial:
+            dop_param = [v for k, v in paramdic.items() if k not in mop_param_key]
+            ops.append(self.op_name(dop_param, **self.op_conf))
 
-            if not any(sg_arg.values()):
-                continue
+        if not any(sg_arg.values()):
+            return ops
 
-            scheduler = ReduceLROnPlateau(
-                optimizer, [sg_arg[k] for k in param_group_key]
+        msg_param_key = ["M", "B"]
+        msg_param = [sg_arg[k] for k in param_group_key if k in msg_param_key]
+        sgs = []
+        if msg_param:
+            msg = ReduceLROnPlateau(mop, msg_param)
+            sgs.append(
+                {
+                    "scheduler": msg,
+                    "interval": "epoch",
+                    "reduce_on_plateau": True,
+                    "monitor": "val_loss",
+                }
             )
-            scheduler.setepoch(self.cur_epoch)
-            sgs.append(scheduler)
+        if self.adversarial:
+            dsg_param = [sg_arg[k] for k in param_group_key if k not in msg_param_key]
+            if dsg_param:
+                dsg = ReduceLROnPlateau(ops[-1], dsg_param)
+                sgs.append(
+                    {
+                        "scheduler": dsg,
+                        "interval": "epoch",
+                        "reduce_on_plateau": True,
+                        "monitor": "dis_loss",
+                    }
+                )
+
         return ops, sgs
 
-    def training_step(self, batch, op, opid, name="", barstep=None):
-        X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
-        N = Ym.size(0)
-
+    def training_step(self, batch, batch_idx: int, opid=0):
         if opid == 0:
-            if self.cur_epoch < self.discardYbEpoch:
+            X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
+            if self.current_epoch < self.discardYbEpoch:
                 Yb = None
             res, loss, summary = self.net.lossWithResult(X, Ym, Yb, mask, self.piter,)
 
-            self.total_batch += 1
-            self.logSummary(name, summary, self.total_batch)
+            self.log(
+                "train_loss", loss, on_step=False, on_epoch=True, logger=False,
+            )
+            self.log_dict(summary, on_step=True, on_epoch=False)
             self.buf = res
 
             if self.flood > 0:
@@ -120,117 +139,21 @@ class ToyNetTrainer(Trainer):
         elif opid == 1:
             res = self.buf[0][-2:]
             loss = self.net.discriminatorLoss(*res, Ym, Yb, piter=self.piter)
+            self.log("dis_loss", loss, on_step=False, on_epoch=True, logger=False)
 
-        loss.backward()
-        op.step()
-        op.zero_grad()
-        barstep(N)
-        return (loss,)
+        return loss
 
-    def validation_step(self, batch, barstep):
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
-        N = Ym.size(0)
-        if self.cur_epoch < self.discardYbEpoch:
+
+        if self.current_epoch < self.discardYbEpoch:
             Yb = None
         loss, _ = self.net.loss(X, Ym, Yb, mask, self.piter,)
-        barstep(N)
-        return (loss,)
+        return {"val_loss": loss}
 
-    def train(self, td, vd, no_aug=None):
-        if no_aug is None:
-            no_aug = td
-        # get all loaders
-        loader = FixLoader(td, device=self.device, **self.dataloader["training"])
-        vloader = FixLoader(vd, device=self.device, **self.dataloader["training"])
-
-        # get all optimizers and schedulers
-        ops, sgs = self.configure_optimizers()
-        if self.adversarial:
-            mop, dop = ops
-        else:
-            (mop,) = ops
-        # init tensorboard logger
-        self.prepareBoard()
-        # lemme see who dare to use cpu for training ???
-        if self.device.type == "cpu":
-            warn("You are using CPU for training ಠಿ_ಠ")
-        else:
-            assert torch.cuda.is_available()
-            torch.cuda.reset_peak_memory_stats()
-            # torch.backends.cudnn.benchmark = True
-
-        trainWithDataset = Batched(self.training_step)
-
-        if self.cur_epoch == 0:
-            demo = first(loader)["X"][:2]
-            self.logger.add_graph(self.net, demo)
-            del demo
-
-        if self.cur_epoch < 5:
-            warmlambda = lambda epoch: min(1, 0.2 * (epoch + 1))
-            warmsg = [torch.optim.lr_scheduler.LambdaLR(op, warmlambda) for op in ops]
-            if self.cur_epoch == 0:
-                # zero grad step to avoid warning. :(
-                warmsg.optimizer.zero_grad()
-                warmsg.optimizer.step()
-
-        for self.cur_epoch in range(self.cur_epoch, self.max_epoch):
-            # warm-up lr
-            if self.cur_epoch < 5:
-                [wsg.step() for wsg in warmsg]
-            elif self.cur_epoch == 5:
-                del warmsg, warmlambda
-                for sg in sgs:
-                    sg.setepoch(5)
-
-            # set training flag
-            self.net.train()
-
-            with Bar(
-                "epoch T%03d" % self.cur_epoch, max=(len(td) << int(self.adversarial)),
-            ) as bar:
-                trainWithDataset(
-                    loader,
-                    op=mop,
-                    opid=0,
-                    name="ourset",
-                    barstep=lambda s: bar.next(s),
-                )
-                if self.adversarial:
-                    (dll,) = trainWithDataset(
-                        loader, op=dop, opid=1, barstep=lambda s: bar.next(s),
-                    )
-                    dll = dll.mean()
-
-            # fatal: set eval when testing and validating
-            self.net.eval()
-            with Bar("epoch V%03d" % self.cur_epoch, max=len(vd)) as bar:
-                (vll,) = Batched(self.validation_step)(
-                    vloader, barstep=lambda s: bar(s)
-                )
-            vll = vll.mean()
-
-            for i, sg in enumerate(sgs):
-                if self.cur_epoch >= 5:
-                    sg.step(dll if i == 1 else vll)
-
-            self.score("trainset", no_aug)
-            merr = self.score("validation", vd)[0]  # validation score
-            self.traceNetwork()
-
-            opdic = {("M", "B"): mop}
-            if self.adversarial:
-                opdic["discriminator"] = dop
-
-            if merr < self.best_mark:
-                self.best_mark = merr.item()
-                self.save("best", opdic)
-            self.save("latest", opdic)
-
-    def test_step(self, batch: dict, barstep=None):
+    def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
         seg, embed, Pm, Pb = self.net(X)
-        barstep(len(X))
 
         res = {
             "pm": Pm,
@@ -258,69 +181,69 @@ class ToyNetTrainer(Trainer):
             res["cy-GT"] = torch.cat(
                 (res["cy-GT"], torch.ones_like(cy1, dtype=torch.long)), dim=0
             )
+
+        if batch_idx == 0:
+            self.log_images(X[:8], self.test_caption[dataloader_idx])
         return res
 
-    @NoGrad
-    def score(self, caption, dataset):
+    def score_epoch_end(self, res: list, dataset_idx=0):
         """
         Score and evaluate the given dataset.
         """
-        self.net.eval()
-
-        loader = FixLoader(dataset, device=self.device, **self.dataloader["scoring"])
-        bar = Bar("score %s%03d" % ('', self.cur_epoch), max=len(dataset) + 2)
-        barstep = lambda s: bar.next(s)
-        res: dict = Batched(self.test_step)(loader, barstep=barstep)
-
-        self.logger.add_embedding(
-            res["c"],
-            metadata=res["ym"].tolist(),
-            global_step=self.cur_epoch,
-            tag=caption,
-        )
-
-        errl = []
+        acc = pl.metrics.Accuracy()
         items = {
             "B-M": ("pm", "ym"),
             "BIRAD": ("pb", "yb"),
             "discrim": ("cy", "cy-GT"),
         }
+
+        res = deep_merge(res)
+        caption = self.test_caption[dataset_idx]
+
+        self.logger.experiment.add_embedding(
+            res["c"],
+            metadata=res["ym"].tolist(),
+            global_step=self.current_epoch,
+            tag=self.test_caption[dataset_idx],
+        )
+
         for k, (p, y) in items.items():
             if y not in res:
                 continue
             p, y = res[p], res[y]
 
-            acc = pl.metrics.Accuracy()
             err = 1 - acc(p, y)
-            self.logger.add_scalar("err/%s/%s" % (k, caption), err, self.cur_epoch)
-            errl.append(err)
+            acc.reset()
+            self.log(
+                "err/%s/%s" % (k, caption),
+                err,
+                on_step=False,
+                on_epoch=True,
+                logger=True,
+                prog_bar=False,
+            )
 
+            if p.dim() == 2 and p.size(1) <= 2:
+                p = p[:, -1]
             if p.dim() == 1:
-                self.logger.add_pr_curve("%s/%s" % (k, caption), p, y, self.cur_epoch)
-                self.logger.add_histogram(
-                    "distribution/%s/%s" % (k, caption), p, self.cur_epoch
+                self.logger.experiment.add_pr_curve(
+                    "%s/%s" % (k, caption), p, y, self.current_epoch
                 )
-            elif p.dim() == 2 and p.size(1) <= 2:
-                self.logger.add_pr_curve(
-                    "%s/%s" % (k, caption), p[:, -1], y, self.cur_epoch
-                )
-                self.logger.add_histogram(
-                    "distribution/%s/%s" % (k, caption), p[:, -1], self.cur_epoch
+                self.logger.experiment.add_histogram(
+                    "distribution/%s/%s" % (k, caption), p, self.current_epoch,
                 )
             else:
-                self.logger.add_histogram(
-                    "distribution/%s/%s" % (k, caption), p, self.cur_epoch
+                self.logger.experiment.add_histogram(
+                    "distribution/%s/%s" % (k, caption), p, self.current_epoch,
                 )
 
-        if not (self.logSegmap or self.logHotmap):
-            barstep(2)
-            bar.finish()
-            return errl
-        else:
-            barstep(1)
+        if self.logSegmap and "dice" in res:
+            self.log(
+                "dice/%s" % caption, res["dice"].mean(), self.current_epoch,
+            )
 
+    def log_images(self, X, caption):
         # log images
-        X = first(loader)["X"][:8].to(self.device)
         heatmap = lambda x, s: 0.7 * x + 0.1 * gray2JET(s, thresh=0.1)
         if self.logHotmap:
             M, B, mw, bw = self.net(X)
@@ -328,23 +251,18 @@ class ToyNetTrainer(Trainer):
                 x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)
             ).sum(dim=1)
             # Now we generate CAM even if dataset is BIRADS-unannotated.
-            self.logger.add_images(
-                "%s/CAM malignant" % caption, heatmap(M, wsum(M, mw)), self.cur_epoch
+            self.logger.experiment.add_images(
+                "%s/CAM malignant" % caption,
+                heatmap(M, wsum(M, mw)),
+                self.current_epoch,
             )
-            self.logger.add_images(
-                "%s/CAM BIRADs" % caption, heatmap(B, wsum(B, bw)), self.cur_epoch
+            self.logger.experiment.add_images(
+                "%s/CAM BIRADs" % caption, heatmap(B, wsum(B, bw)), self.current_epoch,
             )
 
         if self.logSegmap:
-            self.logger.add_scalar(
-                "dice/%s" % caption, res["dice"].mean(), self.cur_epoch
-            )
-            X = first(loader)["X"][:8].to(self.device)
             seg = self.net(X, segment=True)[0].squeeze(1)
-            self.logger.add_images(
-                "%s/segment" % caption, heatmap(X, seg), self.cur_epoch
+            self.logger.experiment.add_images(
+                "%s/segment" % caption, heatmap(X, seg), self.current_epoch,
             )
 
-        barstep(1)
-        bar.finish()
-        return errl

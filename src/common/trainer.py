@@ -4,47 +4,45 @@ A universial trainer ready to be inherited.
 * author: JamzumSum
 * create: 2021-1-12
 """
-from datetime import date
 import os
-
-import torch
-from tensorboardX import SummaryWriter
+from abc import ABC, abstractclassmethod
 from collections import defaultdict
-from abc import ABC
+from datetime import date
+
 import pytorch_lightning as pl
+import torch
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
+from data.plsupport import DPLSet
 
-class Trainer(ABC):
-    cur_epoch = 0
-    total_batch = 0
-    best_mark = 1.0
-    logger = None
 
-    def __init__(self, Net: torch.nn.Module, conf: dict):
+class LightningBase(pl.LightningModule, ABC):
+    def __init__(self, Net, conf: dict):
+        pl.LightningModule.__init__(self)
+
         self.cls_name = Net.__name__
         self.conf = conf
-        self.seed = int(torch.empty((), dtype=torch.int64).random_().item())
 
         self.paths = conf.get("paths", {})
-        self.training = conf.get("training", {})
-        op_conf: list = conf.get("optimizer", ("SGD", {}))
+        self.misc = conf.get("misc", {})
+
+        op_conf = conf.get("optimizer", ("SGD", {}))
         self.op_name = getattr(torch.optim, op_conf[0])
         self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
-        self.dataloader = defaultdict(dict, conf.get("dataloader", {}))
         self.model_conf = conf.get("model", {})
 
-        self.net = Net(**self.model_conf)
+        if self.misc.get("continue", True):
+            self._load()
+        else:
+            self.net = Net(**self.model_conf)
+            self.seed = None
 
-        try:
-            self.load(self.training.get("load_from", "latest"))
-        except ValueError as e:
-            print(e)
-            print("Trainer stopped.")
-            return
-        self.net.to(self.device)
-
-    def __del__(self):
-        if hasattr(self, "board") and self.logger:
-            self.logger.close()
+    def traceNetwork(self):
+        param = self.net.named_parameters()
+        for name, p in param:
+            self.logger.experiment.add_histogram(
+                "network/" + name, p, self.current_epoch
+            )
 
     @property
     def model_dir(self):
@@ -53,82 +51,106 @@ class Trainer(ABC):
         )
 
     @property
-    def log_dir(self):
+    def max_epochs(self):
+        return self.misc.get("max_epochs", 1)
+
+    @property
+    def piter(self):
+        return self.current_epoch / self.max_epochs
+
+    def _load(self):
+        name = self.misc.get("load_from", "latest")
+        path = os.path.join(self.model_dir, name + ".pt")
+        self.load_from_checkpoint(path)
+
+    def on_save_checkpoint(self, checkpoint: dict):
+        checkpoint["seed"] = self.seed
+
+    def on_load_checkpoint(self, checkpoint: dict):
+        self.seed = checkpoint.pop("seed")
+
+    def on_fit_start(self):
+        self._score_buf = []
+
+    def score_step(self, batch, batch_idx, dataloader_idx=0):
+        pass
+
+    def score_epoch_end(self, score_outs, dataloader_idx=0):
+        pass
+
+    def on_validation_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
+        self._score_buf.append(
+            self.score_step(batch, batch_idx, 1)
+        )
+
+    def on_validation_epoch_end(self):
+        self.score_epoch_end(self._score_buf, 1)
+        self._score_buf.clear()
+
+    def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
+        self._score_buf.append(batch)
+
+    def on_train_epoch_end(self, outputs):
+        with torch.no_grad():
+            score_outs = [
+                self.score_step(batch, i, 0)
+                for i, batch in enumerate(self._score_buf)
+            ]
+            self.score_epoch_end(score_outs, 0)
+        self._score_buf.clear()
+
+
+class Trainer(pl.Trainer):
+    def __init__(self, PLNet: LightningBase, Net: torch.nn.Module, conf: dict):
+        self.cls_name = Net.__name__
+        self.conf = conf
+        self.paths = conf.get("paths", {})
+        self.misc = conf.get("misc", {})
+        self.net = PLNet(Net, conf)
+        self.ds = DPLSet(
+            self.conf.get("dataloader", {}),
+            self.conf["datasets"],
+            (8, 2),
+            self.misc.get("augment", None),
+            self.net.seed,
+        )
+        self.net.seed = self.ds.seed
+
+        checkpoint_callback = ModelCheckpoint(
+            monitor="err/B-M/validation",
+            dirpath=self.log_dir,
+            filename="best",
+            save_last=True,
+            mode="min",
+        )
+        checkpoint_callback.FILE_EXTENSION = ".pt"
+        checkpoint_callback.best_model_path = self.log_dir
+        checkpoint_callback.CHECKPOINT_NAME_LAST = "latest"
+
+        board = TensorBoardLogger(self.log_dir)
+        pl.Trainer.__init__(
+            self,
+            callbacks=[checkpoint_callback],
+            default_root_dir=self.model_dir,
+            logger=board,
+            **self.conf.get("flag", {})
+        )
+
+        self.ds.prepare_data()
+        self.ds.setup()
+
+    def fit(self):
+        return pl.Trainer.fit(self, self.net, datamodule=self.ds)
+
+    @property
+    def log_dir(self) -> str:
         return self.paths.get("log_dir", os.path.join("log", self.cls_name)).format(
             date=date.today().strftime("%m%d")
         )
 
     @property
-    def device(self):
-        return torch.device(self.training.get("device", "cpu"))
-
-    @property
-    def max_epoch(self):
-        return self.training.get("max_epoch", 1)
-
-    @property
-    def piter(self):
-        return self.cur_epoch / self.max_epoch
-
-    def save(self, name, optimizers: dict = None):
-        if optimizers:
-            if isinstance(optimizers, dict):
-                optimizers = {k: v.state_dict() for k, v in optimizers.items()}
-            elif isinstance(optimizers, torch.optim.Optimizer):
-                optimizers = optimizers.state_dict()
-
-        vconf = {
-            "seed": self.seed,
-            "cur_epoch": self.cur_epoch,
-            "total_batch": self.total_batch,
-            "best_mark": self.best_mark,
-            "_op_state_dict": optimizers
-        }
-        
-        os.makedirs(self.model_dir, exist_ok=True)
-        torch.save(
-            (
-                self.net.state_dict(),
-                self.conf,
-                vconf,
-            ),
-            os.path.join(self.model_dir, name + ".pt"),
+    def model_dir(self):
+        return self.paths.get("model_dir", os.path.join("model", self.cls_name)).format(
+            date=date.today().strftime("%m%d")
         )
 
-    def load(self, name):
-        if not self.training.get("continue", True):
-            return
-        path = os.path.join(self.model_dir, name + ".pt")
-        if not os.path.exists(path):
-            print("%s not exist. Start new training." % path)
-            return
-
-        state, newconf, vonf = torch.load(path)
-
-        self.net.load_state_dict(state)
-        self.solveConflict(newconf)
-
-        for k, v in vonf.items():
-            setattr(self, k, v)
-        print("epoch %d, score" % self.cur_epoch, self.best_mark)
-        self.cur_epoch += 1
-        return True
-
-    def solveConflict(self, newConf):
-        if self.conf.get("model", None) != newConf.get("model", None):
-            raise ValueError("Model args have been changed")
-        self.conf = newConf  # TODO
-
-    def prepareBoard(self):
-        """fxxk tensorboard spoil the log so LAZY LOAD it"""
-        if self.logger is None:
-            self.logger = SummaryWriter(self.log_dir)
-
-    def logSummary(self, caption, summary: dict, step=None):
-        for k, v in summary.items():
-            self.logger.add_scalar("%s/%s" % (k, caption), v, step)
-
-    def traceNetwork(self):
-        param = self.net.named_parameters()
-        for name, p in param:
-            self.logger.add_histogram("network/" + name, p, self.cur_epoch)

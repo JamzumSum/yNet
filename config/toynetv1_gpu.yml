@@ -4,14 +4,22 @@ model:      # model constructor
   width: 16
   ulevel: 3
   ylevel: 2   # for (512, 512) image, unet level + ypath level <= 8
-  memory_trade: True
 
-# training strategy
-training:  
-  device: cuda:0
+datasets:
+  - set2
+  - set3
+  - BUSI
+  
+# trainer flag
+flag:
+  gpus: 1
+  min_epochs: 40
+  max_epochs: 80
+
+misc:  
+  augment: 1200
   continue: False
   load_from: latest
-  max_epoch: 80
   use_annotation_from: 0
 
 optimizer:
@@ -28,19 +36,12 @@ branch:
       factor: 0.98
       patience: 2
       cooldown: 2
-  B:
-    scheduler: null
-  discriminator:
-    scheduler:
-      factor: 0.1
-      patience: 10
-      cooldown: 0
 
 dataloader:
   training:
     batch_size: 10
     shuffle: True
-  scoring:
+  validating:
     batch_size: 16
     
 paths:

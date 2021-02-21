@@ -1,33 +1,13 @@
 import os
 
-from rich.traceback import install
-from torch import Generator
-
-from data.augment import ElasticAugmentSet, augmentWith
-from data.dataset import CachedDatasetGroup, DistributedConcatSet, classSpecSplit
 from spectrainer import ToyNetTrainer
+from common.trainer import Trainer
 from toynet.toynetv1 import ToyNetV1
 from utils.utils import getConfig
 
-install()
-trainer = ToyNetTrainer(ToyNetV1, getConfig("./config/toynetv1.yml"))
-
-td, vd = classSpecSplit(
-    DistributedConcatSet(
-        [
-            CachedDatasetGroup("./data/set2/set2.pt"),
-            CachedDatasetGroup("./data/set3/set3.pt"),
-            CachedDatasetGroup("./data/BUSI/BUSI.pt"),
-        ],
-        tag=["set2", "set3", "BUSI"],
-    ),
-    *(8, 2),
-    generator=Generator().manual_seed(trainer.seed),
-)
-print("trainset distribution:", td.distribution)
-print("validation distribution:", vd.distribution)
-
-trainer.train(td, vd)
+conf = getConfig("./config/toynetv1.yml")
+trainer = Trainer(ToyNetTrainer, ToyNetV1, conf)
+trainer.fit()
 
 post = trainer.paths.get("post_training", "")
 if post and os.path.exists(post):

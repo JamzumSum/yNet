@@ -1,4 +1,5 @@
 from itertools import product
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
@@ -257,7 +258,7 @@ class _ReduceLROnPlateauSub(torch.optim.lr_scheduler.ReduceLROnPlateau):
                 )
 
 
-class ReduceLROnPlateau:
+class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
     def __init__(self, optimizer, arglist):
         default = {
             "mode": "min",
@@ -305,3 +306,20 @@ class ReduceLROnPlateau:
         self.last_epoch = epoch
         for sg in self.sub:
             if sg: sg.last_epoch = epoch
+
+def deep_merge(out_ls: list):
+    if not out_ls or out_ls[0] is None: return
+
+    resdic = defaultdict(list)
+    for r in out_ls:
+        if isinstance(r, dict): gen = r.items()
+        elif isinstance(r, (list, tuple)): gen = enumerate(r)
+        for j, t in gen:
+            resdic[j].append(t)
+    for k, v in resdic.items():
+        f = torch.cat if v[0].dim() > 0 else torch.stack
+        resdic[k] = f(v, dim=0)
+
+    if isinstance(r, dict): return dict(resdic)
+    elif isinstance(r, (list, tuple)): 
+        return tuple(resdic[i] for i in range(len(resdic)))

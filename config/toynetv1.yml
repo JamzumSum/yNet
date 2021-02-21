@@ -1,8 +1,21 @@
 import: ./toynetv1_gpu.yml
+model:
+  width: 2
 
-training:  # training strategy
-  device: cpu
-    
+flag: 
+  gpus: 0
+  limit_train_batches: 1
+  limit_val_batches: 1
+  limit_test_batches: 1
+  num_sanity_val_steps: 0
+
+dataloader:
+  training:
+    batch_size: 2
+    shuffle: True
+  scoring:
+    batch_size: 2
+
 paths:
   model_dir: model/toynetv1/tmp
   log_dir: log/toynetv1/tmp

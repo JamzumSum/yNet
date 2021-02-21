@@ -32,8 +32,8 @@ class AugmentSet(VirtualDataset, ABC):
         my_distrib = avg * torch.ones_like(org_distrib, dtype=torch.int) - org_distrib
 
         if torch.any(my_distrib < 0):
-            print('At least a class has samples more than %d. \
-            These classes wont be sampled when augumenting.' % avg)
+            print('At least a class has samples more than %d // %d = %d.'
+            'These classes wont be sampled when augumenting.' % (aim_size, self.K, avg))
             my_distrib.clamp_(0, avg)
 
         self.distrib = {distrib_title: my_distrib}
