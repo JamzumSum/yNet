@@ -82,4 +82,6 @@ class FixLoader(DataLoader):
             x = self.augmentFromBatch(x, N)
 
         x = {k: torch.stack([i[k].to(self.device) for i in x]) for k in x[0]}
+        x.setdefault('Yb', None)
+        x.setdefault('mask', None)
         return x

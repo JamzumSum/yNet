@@ -33,11 +33,13 @@ def _reduct(r, reduction: str):
 
 
 @torch.jit.script
-def focal_smooth_bce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
+def focal_smooth_bce(
+    P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"
+):
     # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
     """
     focal bce combined with label smoothing.
-        P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
+        P: [N, K] NOTE: not activated, e.g. softmaxed or sigmoided.
         Y: [N]    NOTE: int
         gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
         smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
@@ -45,7 +47,7 @@ def focal_smooth_bce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean")
     """
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
-    bce = F.binary_cross_entropy(P, YK, weight=weight, reduction="none")
+    bce = F.binary_cross_entropy_with_logits(P, YK, weight=weight, reduction="none")
     pt = torch.exp(-bce)  # [N, K]
     gms = (1 - pt) ** gamma  # [N, K]
     return _reduct(gms * bce, reduction)
@@ -63,12 +65,20 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
     other args are like those in cross_entropy.
     """
     K = P.size(1)
-    a = weight[Y]  # [N]
     YK = smoothed_label(Y, smooth, K)
-    pt = (YK * P).sum(dim=1)  # [N]
+    pt = YK * P  # [N, K]
     gms = (1 - pt) ** gamma  # [N, K]
-    assert torch.all(pt > 0)
-    return _reduct(a * gms * pt.log(), reduction)
+
+    ce = -YK * P.log_softmax(1) if torch.any(pt == 0) else -(pt.log_softmax(1))  # [N, K]
+    if weight is not None:
+        weight = weight / torch.sum(weight)
+        ce = ce * weight
+    ce = (ce * gms).sum(dim=1)  # [N]
+    if reduction == "mean" and weight is not None:
+        batchweight = (weight * YK).sum(dim=1)
+        return ce.sum() / batchweight.sum()
+    else:
+        return _reduct(ce, reduction)
 
 
 def _pairwise_distance(embeddings, squared=False):

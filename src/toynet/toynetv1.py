@@ -8,11 +8,12 @@ from itertools import chain
 
 import torch
 import torch.nn as nn
-from common.loss import F, focal_smooth_loss
+from common.loss import F, focal_smooth_bce
 from common.utils import unsqueeze_as, freeze
 
 from .discriminator import WithCD
 from .unet import ConvStack2, DownConv, UNet
+import pytorch_lightning as pl
 
 
 class BIRADsUNet(nn.Module):
@@ -73,7 +74,7 @@ class BIRADsUNet(nn.Module):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(self, X, segment=True, classify=True):
+    def forward(self, X, segment=True, logit=False):
         """
         X: [N, ic, H, W]
         return: 
@@ -82,18 +83,18 @@ class BIRADsUNet(nn.Module):
             Pm        [N, 2]
             Pb        [N, K]
         """
-        assert segment or classify, "hello? :D"
         c, segment = self.unet(X, segment)
         if self.ylevel:
             c = self.ypath(c)
         x = self.pool(c).squeeze(2).squeeze(2)  # [N, fc * 2^(level + ylevel)]
-        if classify:
-            x = self.dropout(x)
-            Pm = F.softmax(self.mfc(x), dim=1)  # [N, 2]
-            Pb = F.softmax(self.bfc(x), dim=1)  # [N, K]
-            return segment, x, Pm, Pb
-        else:
-            return segment, x, None, None
+        x = self.dropout(x)
+        lm = self.mfc(x)
+        lb = self.bfc(x)
+        if logit: return segment, x, lm, lb
+
+        Pm = F.softmax(lm, dim=1)  # [N, 2]
+        Pb = F.softmax(lb, dim=1)  # [N, K]
+        return segment, x, Pm, Pb
 
     def parameter_groups(self, weight_decay: dict):
         paramAll = self.parameters()
@@ -134,8 +135,8 @@ class ToyNetV1(BIRADsUNet):
         if self.bweight.device != X.device:
             self.bweight = self.bweight.to(X.device)
 
-        res = self.forward(X, segment=mask is not None)
-        seg, embed, Pm, Pb = res
+        res = self.forward(X, segment=mask is not None, logit=True)
+        seg, embed, lm, lb = res
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
         loss = {}
@@ -150,16 +151,16 @@ class ToyNetV1(BIRADsUNet):
         #         _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
             
 
-        loss["pm"] = F.cross_entropy(
-            Pm, Ym, weight=self.mweight,
-            # gamma=1 + piter
+        loss["pm"] = focal_smooth_bce(
+            lm, Ym, weight=self.mweight,
+            gamma=2 * piter ** 4
         )
         
         if seg is not None:
             loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
 
         if Yb is not None:
-            loss["pb"] = focal_smooth_loss(Pb, Yb, gamma=1 + piter, weight=self.bweight)
+            loss["pb"] = focal_smooth_bce(lb, Yb, gamma=1 + piter, weight=self.bweight)
 
         # mcount = torch.bincount(Ym)
         # if len(mcount) == 2 and mcount[0] > 0:

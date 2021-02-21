@@ -20,8 +20,6 @@ optimizer:
 scheduler: null
 
 branch:
-  default:
-    scheduler: null
   M: 
     optimizer:
       lr: 4.e-3

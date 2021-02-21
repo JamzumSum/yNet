@@ -10,14 +10,14 @@ import os
 import torch
 from tensorboardX import SummaryWriter
 from collections import defaultdict
-from rich.progress import Progress
+from abc import ABC
+import pytorch_lightning as pl
 
-
-class Trainer:
+class Trainer(ABC):
     cur_epoch = 0
     total_batch = 0
     best_mark = 1.0
-    board = None
+    logger = None
 
     def __init__(self, Net: torch.nn.Module, conf: dict):
         self.cls_name = Net.__name__
@@ -27,13 +27,12 @@ class Trainer:
         self.paths = conf.get("paths", {})
         self.training = conf.get("training", {})
         op_conf: list = conf.get("optimizer", ("SGD", {}))
-        self.op_name = op_conf[0]
+        self.op_name = getattr(torch.optim, op_conf[0])
         self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
         self.dataloader = defaultdict(dict, conf.get("dataloader", {}))
         self.model_conf = conf.get("model", {})
 
         self.net = Net(**self.model_conf)
-        self.progress = Progress(transient=True, refresh_per_second=2)
 
         try:
             self.load(self.training.get("load_from", "latest"))
@@ -44,9 +43,8 @@ class Trainer:
         self.net.to(self.device)
 
     def __del__(self):
-        self.progress.stop()
-        if hasattr(self, "board") and self.board:
-            self.board.close()
+        if hasattr(self, "board") and self.logger:
+            self.logger.close()
 
     @property
     def model_dir(self):
@@ -123,14 +121,14 @@ class Trainer:
 
     def prepareBoard(self):
         """fxxk tensorboard spoil the log so LAZY LOAD it"""
-        if self.board is None:
-            self.board = SummaryWriter(self.log_dir)
+        if self.logger is None:
+            self.logger = SummaryWriter(self.log_dir)
 
     def logSummary(self, caption, summary: dict, step=None):
         for k, v in summary.items():
-            self.board.add_scalar("%s/%s" % (k, caption), v, step)
+            self.logger.add_scalar("%s/%s" % (k, caption), v, step)
 
     def traceNetwork(self):
         param = self.net.named_parameters()
         for name, p in param:
-            self.board.add_histogram("network/" + name, p, self.cur_epoch)
+            self.logger.add_histogram("network/" + name, p, self.cur_epoch)

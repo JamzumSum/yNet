@@ -27,4 +27,4 @@ class TrainerFunctionTest(TestCase):
         cm = ConfusionMatrix(4)
         cm.add(2 * torch.ones(4).int(), 2 * torch.ones(4).int())
         self.trainer.prepareBoard()
-        self.trainer.board.add_image('confusionmat', cm.mat(), dataformats='HW')
+        self.trainer.logger.add_image('confusionmat', cm.mat(), dataformats='HW')
