@@ -16,12 +16,13 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from data.plsupport import DPLSet
 
 
-class LightningBase(pl.LightningModule, ABC):
+class LightningBase(pl.LightningModule):
     def __init__(self, Net, conf: dict):
-        pl.LightningModule.__init__(self)
+        # UPSTREAM BUG: pl.LightningModule.__init__(self) failed with hparam saving...
+        super().__init__()
 
         self.cls_name = Net.__name__
-        self.conf = conf
+        self.save_hyperparameters(conf)
 
         self.paths = conf.get("paths", {})
         self.misc = conf.get("misc", {})
@@ -30,6 +31,8 @@ class LightningBase(pl.LightningModule, ABC):
         self.op_name = getattr(torch.optim, op_conf[0])
         self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
         self.model_conf = conf.get("model", {})
+
+        self.max_epochs = conf.get('flag', {}).get("max_epochs", 1)
 
         if self.misc.get("continue", True):
             self._load()
@@ -51,10 +54,6 @@ class LightningBase(pl.LightningModule, ABC):
         )
 
     @property
-    def max_epochs(self):
-        return self.misc.get("max_epochs", 1)
-
-    @property
     def piter(self):
         return self.current_epoch / self.max_epochs
 
@@ -70,71 +69,72 @@ class LightningBase(pl.LightningModule, ABC):
         self.seed = checkpoint.pop("seed")
 
     def on_fit_start(self):
-        self._score_buf = []
+        self._score_buf = defaultdict(list)
 
     def score_step(self, batch, batch_idx, dataloader_idx=0):
         pass
 
-    def score_epoch_end(self, score_outs, dataloader_idx=0):
+    def score_epoch_end(self, score_outs):
         pass
 
     def on_validation_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-        self._score_buf.append(
+        self._score_buf[dataloader_idx + self.train_dataloader_num].append(
             self.score_step(batch, batch_idx, 1)
         )
 
     def on_validation_epoch_end(self):
-        self.score_epoch_end(self._score_buf, 1)
+        score_outs = [
+            [self.score_step(batch, i, d) for i, batch in enumerate(self._score_buf[d])]
+            for d in range(self.train_dataloader_num)
+        ] + [
+            self._score_buf[i]
+            for i in range(self.train_dataloader_num, len(self._score_buf))
+        ]
         self._score_buf.clear()
+        self.score_epoch_end(score_outs)
 
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
-        self._score_buf.append(batch)
-
-    def on_train_epoch_end(self, outputs):
-        with torch.no_grad():
-            score_outs = [
-                self.score_step(batch, i, 0)
-                for i, batch in enumerate(self._score_buf)
-            ]
-            self.score_epoch_end(score_outs, 0)
-        self._score_buf.clear()
+        self._score_buf[dataloader_idx].append(batch)
 
 
 class Trainer(pl.Trainer):
     def __init__(self, PLNet: LightningBase, Net: torch.nn.Module, conf: dict):
         self.cls_name = Net.__name__
-        self.conf = conf
-        self.paths = conf.get("paths", {})
         self.misc = conf.get("misc", {})
-        self.net = PLNet(Net, conf)
-        self.ds = DPLSet(
-            self.conf.get("dataloader", {}),
-            self.conf["datasets"],
-            (8, 2),
-            self.misc.get("augment", None),
-            self.net.seed,
-        )
-        self.net.seed = self.ds.seed
+        self.paths = conf.get("paths", {})
 
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
-            dirpath=self.log_dir,
+            dirpath=self.model_dir,
             filename="best",
             save_last=True,
             mode="min",
         )
         checkpoint_callback.FILE_EXTENSION = ".pt"
-        checkpoint_callback.best_model_path = self.log_dir
+        checkpoint_callback.best_model_path = self.model_dir
         checkpoint_callback.CHECKPOINT_NAME_LAST = "latest"
 
-        board = TensorBoardLogger(self.log_dir)
+        board = TensorBoardLogger(self.log_dir, self.name)
+
         pl.Trainer.__init__(
             self,
             callbacks=[checkpoint_callback],
             default_root_dir=self.model_dir,
             logger=board,
-            **self.conf.get("flag", {})
+            **conf.get("flag", {})
         )
+
+        self.net = PLNet(Net, conf)
+        self.ds = DPLSet(
+            conf.get("dataloader", {}),
+            conf["datasets"],
+            (8, 2),
+            self.misc.get("augment", None),
+            {'GPU': 'cuda', 'CPU': 'cpu'}[self._device_type],
+            self.net.seed, 
+        )
+        self.net.seed = self.ds.seed
+        self.net.train_dataloader_num = self.ds.train_dataloader_num
 
         self.ds.prepare_data()
         self.ds.setup()
@@ -154,3 +154,6 @@ class Trainer(pl.Trainer):
             date=date.today().strftime("%m%d")
         )
 
+    @property
+    def name(self):
+        return self.paths.get('name', 'default')

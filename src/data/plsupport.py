@@ -7,7 +7,12 @@ from .dataset import CachedDatasetGroup, DistributedConcatSet, classSpecSplit
 
 
 class DPLSet(pl.LightningDataModule):
-    def __init__(self, conf, sets: list, tv=(8, 2), aug_aimsize=None, seed=None):
+    train_dataloader_num = 1
+    val_dataloader_num = 1
+
+    def __init__(
+        self, conf, sets: list, tv=(8, 2), aug_aimsize=None, device=None, seed=None
+    ):
         self.seed = (
             int(torch.empty((), dtype=torch.int64).random_().item())
             if seed is None
@@ -17,6 +22,7 @@ class DPLSet(pl.LightningDataModule):
         self.sets = tuple(sets)
         self.tv = tv
         self.aimsize = aug_aimsize
+        self.device = device
 
     def prepare_data(self):
         pass
@@ -26,10 +32,9 @@ class DPLSet(pl.LightningDataModule):
             CachedDatasetGroup("./data/{setname}/{setname}.pt".format(setname=i))
             for i in self.sets
         ]
+        self._ad = DistributedConcatSet(datasets, self.sets,)
         self._td, self._vd = classSpecSplit(
-            DistributedConcatSet(datasets, self.sets,),
-            *self.tv,
-            generator=torch.Generator().manual_seed(self.seed),
+            self._ad, *self.tv, generator=torch.Generator().manual_seed(self.seed),
         )
         print("trainset distribution:", self._td.distribution)
         print("validation distribution:", self._vd.distribution)
@@ -43,9 +48,11 @@ class DPLSet(pl.LightningDataModule):
         return FixLoader(
             self._td if self._tda is None else self._tda,
             **self.conf.get("training", {}),
+            device=self.device,
         )
 
     def val_dataloader(self):
-        kwargs = self.conf.get("validating", {})
-        return FixLoader(self._vd, **kwargs)
+        return FixLoader(self._vd, **self.conf.get("validating", {}), device=self.device)
 
+    def test_dataloader(self):
+        return FixLoader(self._ad, **self.conf.get("validating", {}), device=self.device)

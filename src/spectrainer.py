@@ -22,8 +22,8 @@ first = lambda it: next(iter(it))
 class ToyNetTrainer(LightningBase):
     def __init__(self, Net, conf):
         LightningBase.__init__(self, Net, conf)
-        self.sg_conf = self.conf.get("scheduler", {})
-        self.branch_conf = self.conf.get("branch", {})
+        self.sg_conf = conf.get("scheduler", {})
+        self.branch_conf = conf.get("branch", {})
 
         self.discardYbEpoch = self.misc.get("use_annotation_from", self.max_epochs)
         self.flood = self.misc.get("flood", 0)
@@ -186,7 +186,7 @@ class ToyNetTrainer(LightningBase):
             self.log_images(X[:8], self.test_caption[dataloader_idx])
         return res
 
-    def score_epoch_end(self, res: list, dataset_idx=0):
+    def score_epoch_end(self, res: list):
         """
         Score and evaluate the given dataset.
         """
@@ -197,50 +197,46 @@ class ToyNetTrainer(LightningBase):
             "discrim": ("cy", "cy-GT"),
         }
 
-        res = deep_merge(res)
-        caption = self.test_caption[dataset_idx]
+        for dataset_idx, res in enumerate(res):
+            res = deep_merge(res)
+            caption = self.test_caption[dataset_idx]
 
-        self.logger.experiment.add_embedding(
-            res["c"],
-            metadata=res["ym"].tolist(),
-            global_step=self.current_epoch,
-            tag=self.test_caption[dataset_idx],
-        )
-
-        for k, (p, y) in items.items():
-            if y not in res:
-                continue
-            p, y = res[p], res[y]
-
-            err = 1 - acc(p, y)
-            acc.reset()
-            self.log(
-                "err/%s/%s" % (k, caption),
-                err,
-                on_step=False,
-                on_epoch=True,
-                logger=True,
-                prog_bar=False,
+            self.logger.experiment.add_embedding(
+                res["c"],
+                metadata=res["ym"].tolist(),
+                global_step=self.current_epoch,
+                tag=self.test_caption[dataset_idx],
             )
 
-            if p.dim() == 2 and p.size(1) <= 2:
-                p = p[:, -1]
-            if p.dim() == 1:
-                self.logger.experiment.add_pr_curve(
-                    "%s/%s" % (k, caption), p, y, self.current_epoch
-                )
-                self.logger.experiment.add_histogram(
-                    "distribution/%s/%s" % (k, caption), p, self.current_epoch,
-                )
-            else:
-                self.logger.experiment.add_histogram(
-                    "distribution/%s/%s" % (k, caption), p, self.current_epoch,
+            if self.logSegmap and "dice" in res:
+                self.log(
+                    "dice/%s" % caption, res["dice"].mean(), logger=True
                 )
 
-        if self.logSegmap and "dice" in res:
-            self.log(
-                "dice/%s" % caption, res["dice"].mean(), self.current_epoch,
-            )
+            for k, (p, y) in items.items():
+                if y not in res:
+                    continue
+                p, y = res[p], res[y]
+
+                err = 1 - acc(p, y)
+                acc.reset()
+                self.log(
+                    "err/%s/%s" % (k, caption), err, logger=True,
+                )
+
+                if p.dim() == 2 and p.size(1) <= 2:
+                    p = p[:, -1]
+                if p.dim() == 1:
+                    self.logger.experiment.add_pr_curve(
+                        "%s/%s" % (k, caption), p, y, self.current_epoch
+                    )
+                    self.logger.experiment.add_histogram(
+                        "distribution/%s/%s" % (k, caption), p, self.current_epoch,
+                    )
+                else:
+                    self.logger.experiment.add_histogram(
+                        "distribution/%s/%s" % (k, caption), p, self.current_epoch,
+                    )
 
     def log_images(self, X, caption):
         # log images
