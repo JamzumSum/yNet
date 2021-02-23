@@ -1,5 +1,7 @@
 
 def shallow_update(default, update, copy=False):
+    if default is None or update is None: return
+    
     if copy: default = default.copy()
     default.update(update)
     return default

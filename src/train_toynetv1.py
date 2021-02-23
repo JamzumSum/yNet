@@ -3,7 +3,7 @@ import os
 from spectrainer import ToyNetTrainer
 from common.trainer import Trainer
 from toynet.toynetv1 import ToyNetV1
-from utils.utils import getConfig
+from misc.utils import getConfig
 
 conf = getConfig("./config/toynetv1.yml")
 trainer = Trainer(ToyNetTrainer, ToyNetV1, conf)

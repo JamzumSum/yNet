@@ -32,7 +32,7 @@ class LightningBase(pl.LightningModule):
         self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
         self.model_conf = conf.get("model", {})
 
-        self.max_epochs = conf.get('flag', {}).get("max_epochs", 1)
+        self.max_epochs = conf.get("flag", {}).get("max_epochs", 1)
 
         if self.misc.get("continue", True):
             self._load()
@@ -78,23 +78,14 @@ class LightningBase(pl.LightningModule):
         pass
 
     def on_validation_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-        self._score_buf[dataloader_idx + self.train_dataloader_num].append(
-            self.score_step(batch, batch_idx, 1)
+        self._score_buf[dataloader_idx].append(
+            self.score_step(batch, batch_idx, dataloader_idx)
         )
 
     def on_validation_epoch_end(self):
-        score_outs = [
-            [self.score_step(batch, i, d) for i, batch in enumerate(self._score_buf[d])]
-            for d in range(self.train_dataloader_num)
-        ] + [
-            self._score_buf[i]
-            for i in range(self.train_dataloader_num, len(self._score_buf))
-        ]
+        score_outs = [self._score_buf[i] for i in range(len(self._score_buf))]
         self._score_buf.clear()
         self.score_epoch_end(score_outs)
-
-    def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
-        self._score_buf[dataloader_idx].append(batch)
 
 
 class Trainer(pl.Trainer):
@@ -114,7 +105,9 @@ class Trainer(pl.Trainer):
         checkpoint_callback.best_model_path = self.model_dir
         checkpoint_callback.CHECKPOINT_NAME_LAST = "latest"
 
-        board = TensorBoardLogger(self.log_dir, self.name)
+        board = TensorBoardLogger(
+            self.log_dir, self.name, log_graph=True, default_hp_metric=False
+        )
 
         pl.Trainer.__init__(
             self,
@@ -130,17 +123,21 @@ class Trainer(pl.Trainer):
             conf["datasets"],
             (8, 2),
             self.misc.get("augment", None),
-            {'GPU': 'cuda', 'CPU': 'cpu'}[self._device_type],
-            self.net.seed, 
+            {"GPU": "cuda", "CPU": "cpu"}[self._device_type],
+            self.net.seed,
         )
         self.net.seed = self.ds.seed
         self.net.train_dataloader_num = self.ds.train_dataloader_num
+        self.net.test_caption = ["validation", "testset"]
 
         self.ds.prepare_data()
         self.ds.setup()
 
-    def fit(self):
-        return pl.Trainer.fit(self, self.net, datamodule=self.ds)
+    def fit(self, model=None):
+        return pl.Trainer.fit(self, model or self.net, datamodule=self.ds)
+
+    def tune(self, model=None):
+        return pl.Trainer.tune(self, model or self.net, datamodule=self.ds)
 
     @property
     def log_dir(self) -> str:
@@ -156,4 +153,4 @@ class Trainer(pl.Trainer):
 
     @property
     def name(self):
-        return self.paths.get('name', 'default')
+        return self.paths.get("name", "default")

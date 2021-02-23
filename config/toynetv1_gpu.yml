@@ -1,52 +1,67 @@
-model:      # model constructor
+model:
   in_channel: 1
-  K: 6      # 2, 3, 4a, 4b, 4c, 5
+  K: 6 # 2, 3, 4a, 4b, 4c, 5
   width: 16
+
+  # for (512, 512) image, unet level + ypath level <= 8
   ulevel: 3
-  ylevel: 2   # for (512, 512) image, unet level + ypath level <= 8
+  ylevel: 2 
+
+  # use torch checkpoint when training
   memory_trade: True
+
+  # coefficients when calculating multi-task loss
+  coefficients:
+    tm: 0.05
+    seg: 0.8
+    triphard: 2
 
 datasets:
   - set2
   - set3
   - BUSI
-  
+
 # trainer flag
 flag:
   gpus: 1
   min_epochs: 40
   max_epochs: 80
   num_sanity_val_steps: 0
+  track_grad_norm: 2
+  log_every_n_steps: 10
 
-misc:  
+misc:
   augment: 1200
   continue: False
   load_from: latest
   use_annotation_from: 0
-  log_every_n_steps: 10
 
 optimizer:
   - AdamW
+  - lr: 2.5e-3
 
+# LRReduceOnPlateau only
 scheduler: null
 
+# branch is used to control behaviors of diverse param groups.
+# args here will override those in optimizer and scheduler
 branch:
-  M: 
+  M:
     optimizer:
-      lr: 4.e-3
       weight_decay: 1.0e-3
-    scheduler: 
-      factor: 0.98
-      patience: 2
-      cooldown: 2
+    scheduler:
+      factor: 0.9
+      patience: 4
 
 dataloader:
   training:
     batch_size: 10
     shuffle: True
+
+  # for scoring, validating, testing
   validating:
     batch_size: 16
-    
+
 paths:
   name: ynet
   model_dir: model/toynetv1/ynet

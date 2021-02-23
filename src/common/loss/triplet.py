@@ -1,84 +1,9 @@
-"""
-A collection for custom losses. 
-
-* author: JamzumSum
-* create: 2021-1-29
-"""
-
 import torch
-import torch.nn.functional as F
-from torch import Tensor
-
-transequal = lambda x: x == x.T
-
-
-def smoothed_label(target, smoothing=0.0, K=-1):
-    # type: (Tensor, float, int) -> Tensor
-    assert 0.0 <= smoothing <= 0.5
-    one = 1.0 - smoothing
-    zero = smoothing / (K - 1)
-    onehot = F.one_hot(target, num_classes=K)
-    return onehot.float().clamp_(zero, one)
-
-
-def _reduct(r, reduction: str):
-    if reduction == "none":
-        return r
-    elif reduction == "sum":
-        return r.sum()
-    elif reduction == "mean":
-        return r.mean()
-    else:
-        raise ValueError(reduction)
 
 
 @torch.jit.script
-def focal_smooth_bce(
-    P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"
-):
-    # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
-    """
-    focal bce combined with label smoothing.
-        P: [N, K] NOTE: not activated, e.g. softmaxed or sigmoided.
-        Y: [N]    NOTE: int
-        gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
-        smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
-    other args are like those in cross_entropy.
-    """
-    K = P.size(1)
-    YK = smoothed_label(Y, smooth, K)
-    bce = F.binary_cross_entropy_with_logits(P, YK, weight=weight, reduction="none")
-    pt = torch.exp(-bce)  # [N, K]
-    gms = (1 - pt) ** gamma  # [N, K]
-    return _reduct(gms * bce, reduction)
-
-
-@torch.jit.script
-def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
-    # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
-    """
-    focal ce combined with label smoothing.
-        P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
-        Y: [N]    NOTE: int
-        gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
-        smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
-    other args are like those in cross_entropy.
-    """
-    K = P.size(1)
-    YK = smoothed_label(Y, smooth, K)
-    pt = YK * P  # [N, K]
-    gms = (1 - pt) ** gamma  # [N, K]
-
-    ce = -YK * P.log_softmax(1) if torch.any(pt == 0) else -(pt.log_softmax(1))  # [N, K]
-    if weight is not None:
-        weight = weight / torch.sum(weight)
-        ce = ce * weight
-    ce = (ce * gms).sum(dim=1)  # [N]
-    if reduction == "mean" and weight is not None:
-        batchweight = (weight * YK).sum(dim=1)
-        return ce.sum() / batchweight.sum()
-    else:
-        return _reduct(ce, reduction)
+def transequal(x):
+    return x == x.T
 
 
 def _pairwise_distance(embeddings, squared=False):
@@ -105,17 +30,17 @@ def _pairwise_distance(embeddings, squared=False):
     return distances
 
 
-def _masked_minimum(data: Tensor, mask):
+def _masked_minimum(data, mask):
     axis_maximums = data.max(1, keepdims=True).values
     return (mask * (data - axis_maximums)).min(1, keepdims=True).values + axis_maximums
 
 
-def _masked_maximum(data: Tensor, mask):
+def _masked_maximum(data, mask):
     axis_minimums = data.min(1, keepdims=True).values
     return (mask * (data - axis_minimums)).max(1, keepdims=True).values + axis_minimums
 
 
-def semihard_triplet_loss(labels: Tensor, embeddings: Tensor, margin=1.0):
+def semihard_triplet_loss(labels, embeddings, margin=1.0, hard_coefficient=1.0):
     """Computes the triplet loss with semi-hard negative mining.
     The loss encourages the positive distances (between a pair of embeddings with
     the same labels) to be smaller than the minimum negative distance among
@@ -161,7 +86,7 @@ def semihard_triplet_loss(labels: Tensor, embeddings: Tensor, margin=1.0):
     semi_hard_negatives = torch.where(
         mask_final, negatives_outside, negatives_inside
     )  # [N, N]
-    loss_mat = margin + pdist_matrix - semi_hard_negatives  # [N, N]
+    loss_mat = margin + pdist_matrix - hard_coefficient * semi_hard_negatives  # [N, N]
     loss_mat[loss_mat < 0] = 0
     mask_positives = adjacency.float() - torch.eye(
         N, device=embeddings.device
@@ -175,30 +100,15 @@ def semihard_triplet_loss(labels: Tensor, embeddings: Tensor, margin=1.0):
 
 
 class SemiHardTripletLoss(torch.nn.Module):
-    def __init__(self, margin=1.0, normalize=True):
+    def __init__(self, margin=1.0, normalize=True, hard_coefficient=1.):
         torch.nn.Module.__init__(self)
         self.margin = margin
         self.normalize = normalize
+        self.chard = hard_coefficient
 
-    def forward(self, embedding: Tensor, label: Tensor):
+    def forward(self, embedding, label):
         if self.normalize:
             norm = torch.linalg.norm(embedding, dim=1, keepdim=True)  # [N]
             embedding = embedding / norm  # [N, D]
-        return semihard_triplet_loss(label, embedding, self.margin)
+        return semihard_triplet_loss(label, embedding, self.margin, self.chard)
 
-
-@torch.jit.script
-def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
-    # type: (Tensor, Tensor, float, str) -> Tensor
-    r""" computational formula：
-        dice = (2 * tp) / (2 * tp + fp + fn)
-    """
-    N = gt.size(0)
-    pflat = p.view(N, -1)
-    gt_flat = gt.view(N, -1)
-
-    TP = torch.sum(gt_flat * pflat, dim=1)
-    FP = torch.sum(pflat, dim=1) - TP
-    FN = torch.sum(gt_flat, dim=1) - TP
-    dice = (2 * TP + eps) / (2 * TP + FP + FN + eps)
-    return _reduct(dice, reduction)

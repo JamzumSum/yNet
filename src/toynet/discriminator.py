@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from common.support import HasDiscriminator
 from common.utils import freeze
+
 
 class ConsistancyDiscriminator(nn.Sequential):
     '''
@@ -44,7 +46,7 @@ def WithCD(ToyNet, *darg, **dkwarg):
     if 'discriminator' in sp: raise ValueError(str(ToyNet), 'already supports discriminator.')
     sp = (*sp, 'discriminator')
 
-    class DiscriminatorAssembler(ToyNet):
+    class DiscriminatorAssembler(ToyNet, HasDiscriminator):
         support = sp
         def __init__(self, *args, **argv):
             ToyNet.__init__(self, *args, **argv)

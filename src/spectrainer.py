@@ -11,12 +11,22 @@ import torch
 import torch.nn.functional as F
 
 from common.loss import diceCoefficient
+from common.optimizer import ReduceLROnPlateau, no_decay
+from common.support import *
 from common.trainer import LightningBase, pl
-from common.utils import ReduceLROnPlateau, gray2JET, unsqueeze_as, deep_merge
-from utils.dict import shallow_update
+from common.utils import deep_merge, gray2JET, unsqueeze_as
+from misc.dict import shallow_update
 
 lenn = lambda x: len(x) if x else 0
 first = lambda it: next(iter(it))
+
+
+plateau_lr_dic = lambda sg, monitor: {
+    "scheduler": sg,
+    "interval": "epoch",
+    "reduce_on_plateau": True,
+    "monitor": monitor,
+}
 
 
 class ToyNetTrainer(LightningBase):
@@ -25,17 +35,15 @@ class ToyNetTrainer(LightningBase):
         self.sg_conf = conf.get("scheduler", {})
         self.branch_conf = conf.get("branch", {})
 
-        self.discardYbEpoch = self.misc.get("use_annotation_from", self.max_epochs)
+        self.discardYbEpoch = self.misc.get("use_annotation_from", 0)
         self.flood = self.misc.get("flood", 0)
 
-        support = (
-            lambda feature: hasattr(self.net, "support") and feature in self.net.support
-        )
-        self.logHotmap = support("hotmap")
-        self.adversarial = support("discriminator")
-        self.logSegmap = support("segment")
+        self.logHotmap = isinstance(self.net, HeatmapSupported)
+        self.adversarial = isinstance(self.net, HasDiscriminator)
+        self.logSegmap = isinstance(self.net, SegmentSupported)
 
-        self.test_caption = ["testset", "validation"]
+        self.example_input_array = torch.randn((2, 1, 512, 512))
+        self.acc = pl.metrics.Accuracy()
 
     @property
     def default_weight_decay(self):
@@ -49,6 +57,9 @@ class ToyNetTrainer(LightningBase):
         else:
             return
 
+    def forward(self, X):
+        return self.net(X)
+
     def configure_optimizers(self):
         branches = ["M", "B"]
         if self.adversarial:
@@ -57,29 +68,18 @@ class ToyNetTrainer(LightningBase):
         for k in branches:
             d = self.branch_conf.get(k, {})
             op_arg[k] = d.get("optimizer", self.op_conf)
-            d = d.get("scheduler", self.sg_conf)
-            if self.sg_conf is not None and d is not None:
-                d = shallow_update(self.sg_conf, d, True)
-            sg_arg[k] = d
+            sg_arg[k] = shallow_update(
+                self.sg_conf, d.get("scheduler", self.sg_conf), True
+            )
 
         default_decay = self.default_weight_decay
         weight_decay = {
             k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
         }
         paramdic = self.net.parameter_groups(weight_decay)
-
-        param_group_key = []
-        for k, v in op_arg.items():
-            for i, s in enumerate(("", "_no_decay")):
-                if i & 1 and not weight_decay[k]:
-                    continue
-                param_group_key.append(k)
-                sk = k + s
-                paramdic[sk] = {"params": paramdic[sk]}
-                paramdic[sk].update(v)
-                paramdic[sk]["initial_lr"] = v.get("lr", self.op_conf.get("lr", 1e-3))
-                if i & 1:
-                    paramdic[sk]["weight_decay"] = 0.0
+        paramdic, param_group_key = no_decay(
+            weight_decay, paramdic, op_arg, self.op_conf.get("lr", 1e-3)
+        )
 
         mop_param_key = ["M", "M_no_decay", "B", "B_no_decay"]
         mop_param = [paramdic[k] for k in mop_param_key if k in paramdic]
@@ -97,26 +97,12 @@ class ToyNetTrainer(LightningBase):
         sgs = []
         if msg_param:
             msg = ReduceLROnPlateau(mop, msg_param)
-            sgs.append(
-                {
-                    "scheduler": msg,
-                    "interval": "epoch",
-                    "reduce_on_plateau": True,
-                    "monitor": "val_loss",
-                }
-            )
+            sgs.append(plateau_lr_dic(msg, "val_loss"))
         if self.adversarial:
             dsg_param = [sg_arg[k] for k in param_group_key if k not in msg_param_key]
             if dsg_param:
                 dsg = ReduceLROnPlateau(ops[-1], dsg_param)
-                sgs.append(
-                    {
-                        "scheduler": dsg,
-                        "interval": "epoch",
-                        "reduce_on_plateau": True,
-                        "monitor": "dis_loss",
-                    }
-                )
+                sgs.append(plateau_lr_dic(dsg, "dis_loss"))
 
         return ops, sgs
 
@@ -128,9 +114,14 @@ class ToyNetTrainer(LightningBase):
             res, loss, summary = self.net.lossWithResult(X, Ym, Yb, mask, self.piter,)
 
             self.log(
-                "train_loss", loss, on_step=False, on_epoch=True, logger=False,
+                "train_loss",
+                loss,
+                on_step=False,
+                on_epoch=True,
+                logger=False,
+                prog_bar=True,
             )
-            self.log_dict(summary, on_step=True, on_epoch=False)
+            self.log_dict(summary)
             self.buf = res
 
             if self.flood > 0:
@@ -144,12 +135,15 @@ class ToyNetTrainer(LightningBase):
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        if dataloader_idx == 1:
+            return
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
 
         if self.current_epoch < self.discardYbEpoch:
             Yb = None
         loss, _ = self.net.loss(X, Ym, Yb, mask, self.piter,)
-        return {"val_loss": loss}
+        self.buf = loss
+        self.log("val_loss", loss, prog_bar=True)
 
     def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
@@ -190,7 +184,6 @@ class ToyNetTrainer(LightningBase):
         """
         Score and evaluate the given dataset.
         """
-        acc = pl.metrics.Accuracy()
         items = {
             "B-M": ("pm", "ym"),
             "BIRAD": ("pb", "yb"),
@@ -209,17 +202,15 @@ class ToyNetTrainer(LightningBase):
             )
 
             if self.logSegmap and "dice" in res:
-                self.log(
-                    "dice/%s" % caption, res["dice"].mean(), logger=True
-                )
+                self.log("dice/%s" % caption, res["dice"].mean(), logger=True)
 
             for k, (p, y) in items.items():
                 if y not in res:
                     continue
                 p, y = res[p], res[y]
 
-                err = 1 - acc(p, y)
-                acc.reset()
+                err = 1 - self.acc(p, y)
+                self.acc.reset()
                 self.log(
                     "err/%s/%s" % (k, caption), err, logger=True,
                 )
@@ -261,4 +252,40 @@ class ToyNetTrainer(LightningBase):
             self.logger.experiment.add_images(
                 "%s/segment" % caption, heatmap(X, seg), self.current_epoch,
             )
+
+    def test_step(self, batch, batch_idx, dataloader_idx=0):
+        X, ym, yb, detail = batch["X"], batch["Ym"], batch["Yb"], batch["detail"]
+        pm, pb = self.net(X, segment=False)[-2:]
+        ym_hat = pm.argmax(dim=1)
+
+        err = 1 - self.acc(pm, ym)
+        self.acc.reset()
+        self.log("err/B-M/all", err, on_step=False, on_epoch=False, logger=True)
+
+        for c, cname in enumerate(("benign", "malignant")):
+            ym_mask = ym == c
+            cerr = ((ym_mask * ym_hat) != c).sum() / ym_mask.sum()
+            self.logger.experiment.add_class_err(
+                cname, cerr, on_step=False, on_epoch=False, logger=True
+            )
+
+        for ymi, ymhi, di in zip(ym, ym_hat, detail):
+            if ymi != ymhi:
+                self.logger.experiment.add_detail(
+                    di, "B/M", truth=ymi.item(), predict=ymhi.item()
+                )
+
+        if yb is None:
+            return
+        err = 1 - self.acc(pb, yb)
+        self.acc.reset()
+        self.log("err/BIRAD/all", err, on_step=False, on_epoch=False, logger=True)
+
+        # TODO
+        yb_hat = pb.argmax(dim=1)
+        for ymi, ymhi, di in zip(yb, yb_hat, detail):
+            if ymi != ymhi:
+                self.logger.experiment.add_detail(
+                    di, "BIRAD", truth=ymi.item(), predict=ymhi.item()
+                )
 

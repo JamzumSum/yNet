@@ -12,7 +12,7 @@ from itertools import product
 import torch
 from torch import default_generator  # type: ignore
 from torch.utils.data import ConcatDataset, Dataset, Subset, random_split
-from utils.indexserial import IndexLoader
+from misc.indexserial import IndexLoader
 
 first = lambda it: next(iter(it))
 unique = lambda it: list(set(it))
@@ -23,13 +23,29 @@ class Distributed(Dataset, ABC):
         Dataset.__init__(self)
         self.statTitle = statTitle
 
-    @abstractclassmethod
     def getDistribution(self, title: str):
-        raise NotImplementedError
+        if title not in self.statTitle:
+            return
 
-    @abstractclassmethod
+        z = torch.zeros((self.K(title),), dtype=torch.long)
+        for d in self:
+            z[d[title]] += 1
+        return z
+
+    def K(self, title):
+        return max(self, lambda d: d[title])
+
     def argwhere(self, cond, title=None, indices=None):
-        raise NotImplementedError
+        if title is None:
+            ge = lambda i: i
+        else:
+            ge = lambda i: i[title]
+
+        if indices:
+            gen = ((i, self[i],) for i in indices)
+        else:
+            gen = enumerate(self)
+        return [i for i, d in gen if cond(ge(d))]
 
     @property
     def distribution(self):
@@ -50,24 +66,26 @@ class DistributedSubset(Distributed, Subset):
     def __init__(self, dataset: Distributed, indices):
         Subset.__init__(self, dataset, indices)
         Distributed.__init__(self, dataset.statTitle)
+        self._distrib = {}
 
     def getDistribution(self, title):
-        K = len(self.meta["classname"][title])
-        return torch.LongTensor(
-            [len(self.argwhere(lambda l: l == i, title)) for i in range(K)]
-        )
+        if title not in self._distrib:
+            # cache it
+            self._distrib[title] = Distributed.getDistribution(self, title)
+        return self._distrib[title]
 
-    def argwhere(self, cond, title=None, indices=None):
-        if title is None:
-            ge = lambda i: i
-        else:
-            ge = lambda i: i[title]
+    def K(self, title):
+        return len(self.meta["classname"][title])
 
-        if indices:
-            gen = ((i, self.__getitem__(i),) for i in indices)
-        else:
-            gen = enumerate(self)
-        return [i for i, d in gen if cond(ge(d))]
+    def joint(self, title1: str, title2: str):
+        K1 = len(self.getDistribution(title1))
+        K2 = len(self.getDistribution(title2))
+        m = torch.empty((K1, K2), dtype=torch.long)
+        for i in range(K1):
+            arg1 = self.dataset.argwhere(lambda d: d == i, title1, indices=self.indices)
+            for j in range(K2):
+                m[i, j] = len(self.dataset.argwhere(lambda d: d == j, title2, arg1))
+        return m
 
     @property
     def meta(self):
@@ -81,17 +99,19 @@ class DistributedConcatSet(Distributed, ConcatDataset):
         ConcatDataset.__init__(self, datasets)
         Distributed.__init__(self, statTitle)
 
-    def getDistribution(self, title):
-        def safe(D):
-            try:
-                return D.getDistribution(title)
-            except KeyError:
-                return None
+    def K(self, title):
+        if not K in self.statTitle:
+            return
+        for i in self.datasets:
+            K = i.K(title)
+            if K is not None:
+                return K
 
-        stats = [safe(i) for i in self.datasets]
+    def getDistribution(self, title):
+        stats = (i.getDistribution(title) for i in self.datasets)
         stats = [i for i in stats if i is not None]
         if not stats:
-            return None
+            return
         if len(stats) == len(self.datasets):
             return torch.stack(stats).sum(dim=0)
         else:
@@ -99,14 +119,19 @@ class DistributedConcatSet(Distributed, ConcatDataset):
             stats = stats / stats.sum()
             return torch.round_(len(self) * stats)
 
+    def joint(self, title1, title2):
+        return sum(i.joint(title1, title2) for i in self.datasets)
+
     def argwhere(self, cond, title=None, indices=None):
+        if indices is None:
+            return Distributed.argwhere(self, cond, title, indices)
+
         res = []
-        idxs = []
         cm = [0] + self.cumulative_sizes[:-1]
-        for l, r in zip(cm, self.cumulative_sizes):
-            idxs.append(
-                None if indices is None else [i - l for i in indices if l <= i < r]
-            )
+        idxs = [
+            [i - l for i in indices if l <= i < r]
+            for l, r in zip(cm, self.cumulative_sizes)
+        ]
 
         for i, D in enumerate(self.datasets):
             r = D.argwhere(cond, title, idxs[i])
@@ -169,10 +194,18 @@ class CachedDataset(Distributed):
     def getDistribution(self, title):
         return self.distrib[title]
 
-    @property
-    def K(self):
-        return [len(i) for i in self.meta["classname"]]
+    def joint(self, title1, title2):
+        if title1 not in self.statTitle: return
+        if title2 not in self.statTitle: return
+        z = torch.zeros((self.K(title1), self.K(title2)), dtype=torch.long)
 
+        for i in range(len(self)):
+            d = self.__getitem__(i, fetch=False)
+            z[d[title1], d[title2]] += 1
+        return z
+
+    def K(self, title):
+        return len(self.meta["classname"][title])
 
 class CachedDatasetGroup(DistributedConcatSet):
     """
@@ -198,7 +231,12 @@ class CachedDatasetGroup(DistributedConcatSet):
 
 
 def classSpecSplit(
-    dataset: Distributed, t, v, distrib_title="Ym", generator=default_generator, tag=None
+    dataset: Distributed,
+    t,
+    v,
+    distrib_title="Ym",
+    generator=default_generator,
+    tag=None,
 ):
     """
     Split tensors in the condition that:
@@ -253,7 +291,9 @@ def classSpecSplit(
             indices = dataset.argwhere(lambda d: d == clsidx, distrib_title)
             extract = DistributedSubset(dataset, indices)
             # NOTE: fix for continue training
-            seed = int(torch.empty((), dtype=torch.int64).random_(generator=generator).item())
+            seed = int(
+                torch.empty((), dtype=torch.int64).random_(generator=generator).item()
+            )
             gen = torch.Generator().manual_seed(seed)
             trn, val = random_split(extract, [num - vnum, vnum], generator=gen)
             tcs.append(DistributedSubset(extract, trn.indices))

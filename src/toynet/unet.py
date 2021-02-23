@@ -138,8 +138,8 @@ class UNetWOHeader(nn.Module):
         
 
 class UNet(UNetWOHeader):
-    def __init__(self, oc, headers=[], *args, **kwargs):
-        UNetWOHeader.__init__(self, *args, **kwargs)
+    def __init__(self, ic, oc, level=4, fc=64, headers=[], *args, **kwargs):
+        super().__init__(ic, level, fc, *args, **kwargs)
         self.headers = [nn.Conv2d(self.fc, oc, 1)]
         self.headers.extend(
             nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1)) for oc in headers

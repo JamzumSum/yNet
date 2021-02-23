@@ -219,107 +219,23 @@ class PyramidPooling(nn.Module):
         return self.atn(ls)
 
 
-class DirectLR(torch.optim.lr_scheduler._LRScheduler):
-    @property
-    def lr(self):
-        return self.get_last_lr()
-
-    def set_lr(self, lr):
-        if not isinstance(lr, list) and not isinstance(lr, tuple):
-            self._lr = [lr] * len(self.optimizer.param_groups)
-        else:
-            if len(lr) != len(self.optimizer.param_groups):
-                raise ValueError(
-                    "Expected {} lr, but got {}".format(
-                        len(self.optimizer.param_groups), len(lr)
-                    )
-                )
-            self._lr = list(lr)
-
-    def get_lr(self):
-        return self._lr
-
-
-class _ReduceLROnPlateauSub(torch.optim.lr_scheduler.ReduceLROnPlateau):
-    def __init__(self, idx, *args, **argv):
-        self.idx = idx
-        torch.optim.lr_scheduler.ReduceLROnPlateau.__init__(self, *args, **argv)
-
-    def _reduce_lr(self, epoch):
-        param_group = self.optimizer.param_groups[self.idx]
-        old_lr = float(param_group["lr"])
-        new_lr = max(old_lr * self.factor, self.min_lrs[self.idx])
-        if old_lr - new_lr > self.eps:
-            param_group["lr"] = new_lr
-            if self.verbose:
-                print(
-                    "Epoch {:5d}: reducing learning rate"
-                    " of group {} to {:.4e}.".format(epoch, self.idx, new_lr)
-                )
-
-
-class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
-    def __init__(self, optimizer, arglist):
-        default = {
-            "mode": "min",
-            "factor": 0.1,
-            "patience": 10,
-            "threshold": 1e-4,
-            "threshold_mode": "rel",
-            "cooldown": 0,
-            "min_lr": 0,
-            "eps": 1e-8,
-            "verbose": False,
-        }
-        self.optimizer = optimizer
-        if isinstance(arglist, (list, tuple)) and len(arglist) == 1:
-            arglist = arglist * len(optimizer.parameter_groups)
-
-        ld = lambda d, i: d.get(i, default[i])
-        self.sub = [
-            None
-            if arg is None
-            else _ReduceLROnPlateauSub(
-                i,
-                optimizer,
-                mode=ld(arg, "mode"),
-                factor=ld(arg, "factor"),
-                patience=ld(arg, "patience"),
-                threshold=ld(arg, "threshold"),
-                threshold_mode=ld(arg, "threshold_mode"),
-                cooldown=ld(arg, "cooldown"),
-                min_lr=ld(arg, "min_lr"),
-                eps=ld(arg, "eps"),
-                verbose=ld(arg, "verbose"),
-            )
-            for i, arg in enumerate(arglist)
-        ]
-
-    def step(self, metrics):
-        ld = lambda l, i: l[i] if isinstance(l, (list, tuple)) else l
-
-        for i, sg in enumerate(self.sub):
-            if sg:
-                sg.step(ld(metrics, i))
-
-    def setepoch(self, epoch):
-        self.last_epoch = epoch
-        for sg in self.sub:
-            if sg: sg.last_epoch = epoch
-
 def deep_merge(out_ls: list):
-    if not out_ls or out_ls[0] is None: return
+    if not out_ls or out_ls[0] is None:
+        return
 
     resdic = defaultdict(list)
     for r in out_ls:
-        if isinstance(r, dict): gen = r.items()
-        elif isinstance(r, (list, tuple)): gen = enumerate(r)
+        if isinstance(r, dict):
+            gen = r.items()
+        elif isinstance(r, (list, tuple)):
+            gen = enumerate(r)
         for j, t in gen:
             resdic[j].append(t)
     for k, v in resdic.items():
         f = torch.cat if v[0].dim() > 0 else torch.stack
         resdic[k] = f(v, dim=0)
 
-    if isinstance(r, dict): return dict(resdic)
-    elif isinstance(r, (list, tuple)): 
+    if isinstance(r, dict):
+        return dict(resdic)
+    elif isinstance(r, (list, tuple)):
         return tuple(resdic[i] for i in range(len(resdic)))

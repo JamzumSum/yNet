@@ -52,7 +52,14 @@ class DPLSet(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
-        return FixLoader(self._vd, **self.conf.get("validating", {}), device=self.device)
+        kwargs = self.conf.get("validating", {})
+        return (
+            FixLoader(self._vd, **kwargs, device=self.device),
+            FixLoader(self._td, **kwargs, device=self.device),
+        )
 
     def test_dataloader(self):
-        return FixLoader(self._ad, **self.conf.get("validating", {}), device=self.device)
+        return FixLoader(
+            self._ad, **self.conf.get("validating", {}), device=self.device
+        )
+

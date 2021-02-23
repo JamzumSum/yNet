@@ -5,18 +5,20 @@ A toy implement for classifying benign/malignant and BIRADs
 * create: 2021-1-11
 """
 from itertools import chain
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
 from common.loss import F, focal_smooth_bce
+from common.loss.triplet import SemiHardTripletLoss
 from common.utils import unsqueeze_as, freeze
+from common.support import *
 
 from .discriminator import WithCD
 from .unet import ConvStack2, DownConv, UNet
-import pytorch_lightning as pl
 
 
-class BIRADsUNet(nn.Module):
+class BIRADsUNet(nn.Module, SegmentSupported):
     """
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     """
@@ -63,9 +65,7 @@ class BIRADsUNet(nn.Module):
     def initParameter(self, zero_init_residual=False):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode="fan_out", nonlinearity="relu"
-                )
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -90,7 +90,8 @@ class BIRADsUNet(nn.Module):
         x = self.dropout(x)
         lm = self.mfc(x)
         lb = self.bfc(x)
-        if logit: return segment, x, lm, lb
+        if logit:
+            return segment, x, lm, lb
 
         Pm = F.softmax(lm, dim=1)  # [N, 2]
         Pb = F.softmax(lb, dim=1)  # [N, K]
@@ -121,20 +122,24 @@ class BIRADsUNet(nn.Module):
 
 
 class ToyNetV1(BIRADsUNet):
-    support = ("segment",)
-    mweight = torch.Tensor([0.4, 0.6])
-    bweight = torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1])
+    def __init__(self, *args, coefficients: dict = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if coefficients is None:
+            coefficients = {}
+        self.coefficients = defaultdict(lambda: 1, coefficients)
+        self.mweight = nn.Parameter(torch.Tensor([0.4, 0.6]), False)
+        self.bweight = nn.Parameter(torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]), False)
+
+        self.triplet = SemiHardTripletLoss(
+            margin=self.coefficients.get("margin", 0.3),
+            hard_coefficient=self.coefficients["triphard"],
+        )
 
     def _loss(self, X, Ym, Yb=None, mask=None, piter=0.0):
         """
         Protected for classes inherit from ToyNetV1.
         return: Original result, M-branch losses, B-branch losses.
         """
-        if self.mweight.device != X.device:
-            self.mweight = self.mweight.to(X.device)
-        if self.bweight.device != X.device:
-            self.bweight = self.bweight.to(X.device)
-
         res = self.forward(X, segment=mask is not None, logit=True)
         seg, embed, lm, lb = res
         # ToyNetV1 does not constrain between the two CAMs
@@ -149,22 +154,23 @@ class ToyNetV1(BIRADsUNet):
         #     elif mask is not None:
         #         # use ground-truth as guidance
         #         _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
-            
 
-        loss["pm"] = focal_smooth_bce(
-            lm, Ym, weight=self.mweight,
-            gamma=2 * piter ** 4
+        loss["pm"] = F.cross_entropy(
+            lm,
+            Ym,
+            weight=self.mweight,
+            # gamma=2 * piter ** 4
         )
-        
+
         if seg is not None:
             loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
 
         if Yb is not None:
             loss["pb"] = focal_smooth_bce(lb, Yb, gamma=1 + piter, weight=self.bweight)
 
-        # mcount = torch.bincount(Ym)
-        # if len(mcount) == 2 and mcount[0] > 0:
-        #     loss['tm'] = self.sh_triloss(embed, Ym)
+        mcount = torch.bincount(Ym)
+        if len(mcount) == 2 and mcount[0] > 0:
+            loss["tm"] = self.triplet(embed, Ym)
         # TODO: triplet of BIRADs
         return res, loss
 
@@ -182,7 +188,7 @@ class ToyNetV1(BIRADsUNet):
         for k, v in itemdic.items():
             if k not in loss:
                 continue
-            cum_loss = cum_loss + loss[k]
+            cum_loss = cum_loss + loss[k] * self.coefficients[k]
             summary["loss/" + v] = loss[k].detach()
         return res, cum_loss, summary
 
@@ -198,12 +204,3 @@ class ToyNetV1(BIRADsUNet):
     @staticmethod
     def WCDVer():
         return WithCD(ToyNetV1)
-
-
-if __name__ == "__main__":
-    x = torch.randn(2, 1, 572, 572)
-    toy = ToyNetV1(1, 6, [12, 24, 48])
-    loss, _ = toy.loss(
-        x, torch.zeros(2, dtype=torch.long), torch.ones(2, dtype=torch.long)
-    )
-    loss.backward()
