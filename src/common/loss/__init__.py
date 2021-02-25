@@ -62,12 +62,11 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
     """
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
-    pt = YK * P  # [N, K]
+    ce = -YK * P.log_softmax(1)  # [N, K]
+
+    pt = torch.exp(-ce)  # [N, K]
     gms = (1 - pt) ** gamma  # [N, K]
 
-    ce = (
-        -YK * P.log_softmax(1) if torch.any(pt == 0) else -(pt.log_softmax(1))
-    )  # [N, K]
     if weight is not None:
         weight = weight / torch.sum(weight)
         ce = ce * weight

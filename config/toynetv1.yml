@@ -7,6 +7,10 @@ flag:
   limit_train_batches: 1
   limit_val_batches: 1
   limit_test_batches: 1
+  precision: 32
+
+misc:
+  continue: False
 
 dataloader:
   training:

@@ -8,7 +8,7 @@ model:
   ylevel: 2 
 
   # use torch checkpoint when training
-  memory_trade: True
+  memory_trade: False
 
   # coefficients when calculating multi-task loss
   coefficients:
@@ -24,11 +24,13 @@ datasets:
 # trainer flag
 flag:
   gpus: 1
+  precision: 16
+  # amp_backend: apex
   min_epochs: 40
   max_epochs: 80
   num_sanity_val_steps: 0
-  track_grad_norm: 2
   log_every_n_steps: 10
+  terminate_on_nan: True
 
 misc:
   augment: 1200

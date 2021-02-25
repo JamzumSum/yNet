@@ -4,20 +4,7 @@ from collections import defaultdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-@torch.jit.script
-def freeze(tensor, f=0.0):
-    # type: (Tensor, float) -> Tensor
-    return (1 - f) * tensor + f * tensor.detach()
-
-
-@torch.jit.script
-def unsqueeze_as(s, t, dim=-1):
-    # type: (Tensor, Tensor, int) -> Tensor
-    while s.dim() < t.dim():
-        s = s.unsqueeze(dim)
-    return s
+from . import unsqueeze_as
 
 
 @torch.jit.script
@@ -239,3 +226,14 @@ def deep_merge(out_ls: list):
         return dict(resdic)
     elif isinstance(r, (list, tuple)):
         return tuple(resdic[i] for i in range(len(resdic)))
+
+
+def morph_close(X, kernel=3, iteration=1):
+    # type: (Tensor, int, int) -> Tensor
+    assert kernel & 1
+    mp = torch.nn.MaxPool2d(kernel, 1, (kernel - 1) // 2)
+
+    for _ in range(iteration):
+        X = -mp(-mp(X))
+
+    return X

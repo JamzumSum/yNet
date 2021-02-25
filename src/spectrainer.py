@@ -11,9 +11,9 @@ import torch
 import torch.nn.functional as F
 
 from common.loss import diceCoefficient
-from common.optimizer import ReduceLROnPlateau, no_decay
+from common.optimizer import ReduceLROnPlateau, no_decay, get_arg_default
 from common.support import *
-from common.trainer import LightningBase, pl
+from common.trainer.fsm import FSMBase, pl
 from common.utils import deep_merge, gray2JET, unsqueeze_as
 from misc.dict import shallow_update
 
@@ -29,11 +29,10 @@ plateau_lr_dic = lambda sg, monitor: {
 }
 
 
-class ToyNetTrainer(LightningBase):
+class ToyNetTrainer(FSMBase):
     def __init__(self, Net, conf):
-        LightningBase.__init__(self, Net, conf)
-        self.sg_conf = conf.get("scheduler", {})
-        self.branch_conf = conf.get("branch", {})
+        super().__init__(Net, conf)
+        self.branch_conf = conf["branch"]
 
         self.discardYbEpoch = self.misc.get("use_annotation_from", 0)
         self.flood = self.misc.get("flood", 0)
@@ -44,18 +43,6 @@ class ToyNetTrainer(LightningBase):
 
         self.example_input_array = torch.randn((2, 1, 512, 512))
         self.acc = pl.metrics.Accuracy()
-
-    @property
-    def default_weight_decay(self):
-        argls: list = self.op_name.__init__.__code__.co_varnames[
-            : self.op_name.__init__.__code__.co_argcount
-        ]
-        if "weight_decay" in argls:
-            return self.op_name.__init__.__defaults__[
-                argls.index("weight_decay") - len(argls)
-            ]
-        else:
-            return
 
     def forward(self, X):
         return self.net(X)
@@ -72,13 +59,14 @@ class ToyNetTrainer(LightningBase):
                 self.sg_conf, d.get("scheduler", self.sg_conf), True
             )
 
-        default_decay = self.default_weight_decay
+        default_decay = get_arg_default(self.op_name.__init__, "weight_decay")
+        default_lr = get_arg_default(self.op_name.__init__, 'lr')
         weight_decay = {
             k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
         }
         paramdic = self.net.parameter_groups(weight_decay)
         paramdic, param_group_key = no_decay(
-            weight_decay, paramdic, op_arg, self.op_conf.get("lr", 1e-3)
+            weight_decay, paramdic, op_arg, self.op_conf.get("lr", default_lr)
         )
 
         mop_param_key = ["M", "M_no_decay", "B", "B_no_decay"]
@@ -142,8 +130,7 @@ class ToyNetTrainer(LightningBase):
         if self.current_epoch < self.discardYbEpoch:
             Yb = None
         loss, _ = self.net.loss(X, Ym, Yb, mask, self.piter,)
-        self.buf = loss
-        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_loss", loss, prog_bar=True, logger=False)
 
     def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
@@ -198,7 +185,7 @@ class ToyNetTrainer(LightningBase):
                 res["c"],
                 metadata=res["ym"].tolist(),
                 global_step=self.current_epoch,
-                tag=self.test_caption[dataset_idx],
+                tag=caption,
             )
 
             if self.logSegmap and "dice" in res:

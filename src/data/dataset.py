@@ -10,9 +10,9 @@ from collections import defaultdict
 from itertools import product
 
 import torch
+from misc.indexserial import IndexLoader
 from torch import default_generator  # type: ignore
 from torch.utils.data import ConcatDataset, Dataset, Subset, random_split
-from misc.indexserial import IndexLoader
 
 first = lambda it: next(iter(it))
 unique = lambda it: list(set(it))
@@ -100,7 +100,7 @@ class DistributedConcatSet(Distributed, ConcatDataset):
         Distributed.__init__(self, statTitle)
 
     def K(self, title):
-        if not K in self.statTitle:
+        if title not in self.statTitle:
             return
         for i in self.datasets:
             K = i.K(title)
@@ -195,8 +195,10 @@ class CachedDataset(Distributed):
         return self.distrib[title]
 
     def joint(self, title1, title2):
-        if title1 not in self.statTitle: return
-        if title2 not in self.statTitle: return
+        if title1 not in self.statTitle:
+            return
+        if title2 not in self.statTitle:
+            return
         z = torch.zeros((self.K(title1), self.K(title2)), dtype=torch.long)
 
         for i in range(len(self)):
@@ -207,26 +209,26 @@ class CachedDataset(Distributed):
     def K(self, title):
         return len(self.meta["classname"][title])
 
+
 class CachedDatasetGroup(DistributedConcatSet):
     """
     Dataset for a group of cached datasets.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, device=None):
         d: dict = torch.load(path)
         shapedic: dict = d.pop("data")
-        idxs: list = d.pop("index")
-        self.loader = IndexLoader(os.path.splitext(path)[0] + ".imgs", idxs)
+        index: list = d.pop("index")
+        # group holder the loader entity
+        self.loader = IndexLoader(os.path.splitext(path)[0] + ".imgs", index, device)
 
-        def copy(d, shape):
+        datasets = []
+        for shape, dic in shapedic.items():
             d = d.copy()
             d["shape"] = shape
-            return d
+            # and specific dataset hold a pointer of loader
+            datasets.append(CachedDataset(self.loader, dic, d))
 
-        datasets = [
-            CachedDataset(self.loader, dic, copy(d, shape))
-            for shape, dic in shapedic.items()
-        ]
         DistributedConcatSet.__init__(self, datasets, tag=shapedic.keys())
 
 

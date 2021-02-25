@@ -4,38 +4,30 @@ import torch
 from .augment import ElasticAugmentSet, augmentWith
 from .dataloader import FixLoader
 from .dataset import CachedDatasetGroup, DistributedConcatSet, classSpecSplit
+from common.support import DeviceAwareness
 
 
-class DPLSet(pl.LightningDataModule):
+class DPLSet(pl.LightningDataModule, DeviceAwareness):
     train_dataloader_num = 1
     val_dataloader_num = 1
 
-    def __init__(
-        self, conf, sets: list, tv=(8, 2), aug_aimsize=None, device=None, seed=None
-    ):
-        self.seed = (
-            int(torch.empty((), dtype=torch.int64).random_().item())
-            if seed is None
-            else seed
-        )
+    def __init__(self, conf, sets: list, tv=(8, 2), aug_aimsize=None, device=None):
+        DeviceAwareness.__init__(self, device)
         self.conf = conf
         self.sets = tuple(sets)
         self.tv = tv
         self.aimsize = aug_aimsize
-        self.device = device
 
     def prepare_data(self):
         pass
 
     def setup(self, stage=None):
         datasets = [
-            CachedDatasetGroup("./data/{setname}/{setname}.pt".format(setname=i))
+            CachedDatasetGroup("./data/{setname}/{setname}.pt".format(setname=i), self.device)
             for i in self.sets
         ]
         self._ad = DistributedConcatSet(datasets, self.sets,)
-        self._td, self._vd = classSpecSplit(
-            self._ad, *self.tv, generator=torch.Generator().manual_seed(self.seed),
-        )
+        self._td, self._vd = classSpecSplit(self._ad, *self.tv,)
         print("trainset distribution:", self._td.distribution)
         print("validation distribution:", self._vd.distribution)
         if self.aimsize is None:

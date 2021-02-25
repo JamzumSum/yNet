@@ -1,7 +1,9 @@
 import os
-from io import BytesIO
+from io import BytesIO, FileIO
 
 from torch import load, save
+from common.support import DeviceAwareness
+
 
 class IndexDumper:
     def __init__(self, filepath: str):
@@ -19,27 +21,35 @@ class IndexDumper:
     def __del__(self):
         if not self._f.closed: self._f.close()
 
-class IndexLoader:
-    def __init__(self, filepath: str, index: list):
-        self._f = self._f = open(filepath, 'rb')
+class IndexLoader(DeviceAwareness):
+    def __init__(self, filepath: str, index: list, device=None):
+        DeviceAwareness.__init__(self, device)
         self._index = index
+        self._f = filepath
 
     def load(self, i):
-        self._f.seek(self._index[i])
-        if i + 1 < len(self._index): 
-            buf = BytesIO(self._f.read(self._index[i + 1] - self._index[i]))
-        else:
-            buf = BytesIO(self._f.read())
-        return load(buf)
+        with open(self._f, 'rb') as f:
+            f.seek(self._index[i])
+            if i + 1 < len(self._index): 
+                buf = BytesIO(f.read(self._index[i + 1] - self._index[i]))
+            else:
+                buf = BytesIO(f.read())
+            return load(buf, self.device)
 
     def loadAll(self):
-        return [self.load(i) for i in self._index]
+        with open(self._f, 'rb') as f:
+            r = []
+            for i in range(len(self._index)):
+                if i + 1 < len(self._index): 
+                    buf = BytesIO(f.read(self._index[i + 1] - self._index[i]))
+                else:
+                    buf = BytesIO(f.read())
+                r.append(load(buf, self.device))
+            return r
         
-    def __del__(self):
-        if not self._f.closed: self._f.close()
 
 def indexDumpAll(ls, filepath)->list:
     return IndexDumper(filepath).dumpAll(ls)
 
-def indexLoadAll(filepath, index)-> list:
-    return IndexLoader(filepath, index).loadAll()
+def indexLoadAll(filepath, index, device=None)-> list:
+    return IndexLoader(filepath, index, device).loadAll()

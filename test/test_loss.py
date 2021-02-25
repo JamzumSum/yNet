@@ -2,8 +2,8 @@ from unittest import TestCase
 
 import torch
 import torch.nn as nn
-from common.loss import (F, SemiHardTripletLoss, focal_smooth_bce,
-                         focal_smooth_ce)
+from common.loss import F, focal_smooth_bce, focal_smooth_ce
+from common.loss.triplet import SemiHardTripletLoss
 
 
 def teq(t1, t2, eps=1e-5):
@@ -58,7 +58,7 @@ class FocalBCETest(TestCase):
         P = torch.rand(4, 2)
         Y = torch.randint(2, (4,)).long()
         lossf = focal_smooth_bce(P, Y, gamma=0, weight=torch.Tensor([.4, .6]))
-        lossb = F.binary_cross_entropy(P, F.one_hot(Y).float(), weight=torch.Tensor([.4, .6]))
+        lossb = F.binary_cross_entropy_with_logits(P, F.one_hot(Y).float(), weight=torch.Tensor([.4, .6]))
         print(lossf, lossb)
         self.assertTrue(teq(lossf, lossb))
 
@@ -74,14 +74,14 @@ class FocalBCETest(TestCase):
         loss.backward()
         op.step()
         self.assertTrue(torch.all(P[:, 0] > 0.2))
-        self.assertTrue(torch.all(P[:, 1] < 0.8))
+        self.assertTrue(torch.all(P[:, 1] < 0.8))        
 
 
 class FocalCETest(TestCase):
     def testvalue(self):
         P = torch.rand(4, 2)
         Y = torch.randint(2, (4,)).long()
-        lossf = focal_smooth_ce(P.softmax(dim=1), Y, gamma=0, weight=torch.Tensor([.4, .6]))
+        lossf = focal_smooth_ce(P, Y, gamma=0, weight=torch.Tensor([.4, .6]))
         lossc = F.cross_entropy(P, Y, weight=torch.Tensor([.4, .6]))
         print(lossf, lossc)
         self.assertTrue(teq(lossf, lossc))
@@ -92,7 +92,7 @@ class FocalCETest(TestCase):
         P = P.requires_grad_(True)
 
         Y = torch.zeros(4).long()
-        loss = focal_smooth_ce(P, Y, smooth=0)
+        loss = focal_smooth_ce(P, Y, smooth=0.1)
 
         op = torch.optim.SGD((P,), lr=1)
         loss.backward()
@@ -100,6 +100,15 @@ class FocalCETest(TestCase):
         self.assertTrue(torch.all(P[:, 0] > 0.2))
         self.assertTrue(torch.all(P[:, 1] < 0.8))
 
+    def testnan(self):
+        P = torch.empty((1, 2))
+        Y = torch.Tensor([0]).long()
+        P[:] = -1e36
+
+        ce = focal_smooth_ce(P.requires_grad_(), Y, smooth=0, weight=torch.Tensor([.4, .6]))
+        ce.backward()
+        self.assertFalse(torch.any(torch.isnan(ce)))
+        self.assertFalse(torch.any(torch.isinf(ce)))
 
 class TripletTest(TestCase):
     def testTriplet2(self):

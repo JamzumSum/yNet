@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from common.support import HasDiscriminator
-from common.utils import freeze
+from common import freeze
 
 
 class ConsistancyDiscriminator(nn.Sequential):

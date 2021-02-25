@@ -1,5 +1,5 @@
 from unittest import TestCase
-from utils.indexserial import indexDumpAll, IndexLoader
+from misc.indexserial import indexDumpAll, IndexLoader
 from random import randint
 
 class TestSerialize(TestCase):
@@ -8,7 +8,7 @@ class TestSerialize(TestCase):
         idx = indexDumpAll(data, 'tmp/test/serialize.pt')
         
         f = IndexLoader('tmp/test/serialize.pt', idx)
-        ld = [f.load(i) for i in range(100)]
+        ld = f.loadAll()
         self.assertEquals(data, ld)
 
     def testRandomRead(self):

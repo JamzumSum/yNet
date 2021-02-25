@@ -9,9 +9,9 @@ from collections import defaultdict
 
 import torch
 import torch.nn as nn
-from common.loss import F, focal_smooth_bce
+from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import SemiHardTripletLoss
-from common.utils import unsqueeze_as, freeze
+from common import unsqueeze_as, freeze
 from common.support import *
 
 from .discriminator import WithCD
@@ -127,13 +127,10 @@ class ToyNetV1(BIRADsUNet):
         if coefficients is None:
             coefficients = {}
         self.coefficients = defaultdict(lambda: 1, coefficients)
-        self.mweight = nn.Parameter(torch.Tensor([0.4, 0.6]), False)
-        self.bweight = nn.Parameter(torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]), False)
+        self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
+        self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
 
-        self.triplet = SemiHardTripletLoss(
-            margin=self.coefficients.get("margin", 0.3),
-            hard_coefficient=self.coefficients["triphard"],
-        )
+        self.triplet = SemiHardTripletLoss(margin=self.coefficients.get("margin", 0.3),)
 
     def _loss(self, X, Ym, Yb=None, mask=None, piter=0.0):
         """
@@ -155,12 +152,7 @@ class ToyNetV1(BIRADsUNet):
         #         # use ground-truth as guidance
         #         _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
 
-        loss["pm"] = F.cross_entropy(
-            lm,
-            Ym,
-            weight=self.mweight,
-            # gamma=2 * piter ** 4
-        )
+        loss["pm"] = focal_smooth_ce(lm, Ym, gamma=0, smooth=0.1, weight=self.mweight,)
 
         if seg is not None:
             loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
