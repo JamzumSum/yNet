@@ -1,13 +1,14 @@
 import os
 
 from spectrainer import ToyNetTrainer
-from common.trainer import Trainer
+from common.trainer import Trainer, getTrainComponents
 from toynet.toynetv1 import ToyNetV1
-from misc.utils import getConfig
+from common.trainer import getConfig
 
-conf = getConfig("./config/toynetv1.yml")
-trainer = Trainer(ToyNetTrainer, ToyNetV1, conf)
-trainer.fit()
+trainer, net, data = getTrainComponents(
+    ToyNetTrainer, ToyNetV1, "./config/toynetv1.yml"
+)
+trainer.fit(net, datamodule=data)
 
 post = trainer.paths.get("post_training", "")
 if post and os.path.exists(post):

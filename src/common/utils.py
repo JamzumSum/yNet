@@ -206,7 +206,7 @@ class PyramidPooling(nn.Module):
         return self.atn(ls)
 
 
-def deep_merge(out_ls: list):
+def deep_collate(out_ls: list):
     if not out_ls or out_ls[0] is None:
         return
 

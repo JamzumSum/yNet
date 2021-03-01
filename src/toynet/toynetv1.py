@@ -4,18 +4,21 @@ A toy implement for classifying benign/malignant and BIRADs
 * author: JamzumSum
 * create: 2021-1-11
 """
-from itertools import chain
 from collections import defaultdict
+from itertools import chain
 
 import torch
 import torch.nn as nn
+from common import freeze, unsqueeze_as
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import SemiHardTripletLoss
-from common import unsqueeze_as, freeze
 from common.support import *
+from common.utils import morph_close
 
 from .discriminator import WithCD
 from .unet import ConvStack2, DownConv, UNet
+
+yes = lambda p: torch.rand(()) < p
 
 
 class BIRADsUNet(nn.Module, SegmentSupported):
@@ -46,7 +49,7 @@ class BIRADsUNet(nn.Module, SegmentSupported):
         self.memory_trade = memory_trade
         self.ylevel = ylevel
 
-        cc = self.unet.fc * 2 ** self.unet.level
+        cc = 2 * self.unet.fc * 2 ** self.unet.level
         mls = []
         for i in range(ylevel << 1):
             if i & 1:
@@ -74,28 +77,49 @@ class BIRADsUNet(nn.Module, SegmentSupported):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(self, X, segment=True, logit=False):
+    def forward(self, X, mask=None, segment=True, classify=True, logit=False):
         """
-        X: [N, ic, H, W]
+        args: 
+            X: [N, ic, H, W]
+            mask: optional [N, 1, H, W]
+        flag:
+            segment: if true, the whole unet will be inferenced to generate a segment map.
+            classify: if true, the ypath is inferenced to get classification result.
+            logit: skip softmax for some losses that needn't that.
         return: 
-            segment map           [N, 2, H, W]
-            x: bottom of unet feature. [N, fc * 2^level]
+            segment map  [N, 2, H, W]. return this alone if `segment but not classify`
+            x: bottom of unet feature. [N, fc * 2^ul]
             Pm        [N, 2]
             Pb        [N, K]
         """
-        c, segment = self.unet(X, segment)
+        if not segment and mask is None:
+            with torch.no_grad():
+                c, seg = self.unet(X, True)
+        else:
+            c, seg = self.unet(X, mask is None or segment)
+
+        if not classify:
+            return seg
+
+        if mask is None:
+            mask = morph_close(seg.detach())
+
+        cg, _ = self.unet(X * mask.clamp(0.3, 1), False)
+        c = torch.cat((c, cg), dim=1)  # [N, fc * 2^(ul + 1), H, W]
+
         if self.ylevel:
             c = self.ypath(c)
-        x = self.pool(c).squeeze(2).squeeze(2)  # [N, fc * 2^(level + ylevel)]
-        x = self.dropout(x)
+
+        c = self.pool(c).squeeze(2).squeeze(2)  # [N, fc * 2^(ul + yl + 1)]
+        x = self.dropout(c)
         lm = self.mfc(x)
         lb = self.bfc(x)
         if logit:
-            return segment, x, lm, lb
+            return seg, c, lm, lb
 
         Pm = F.softmax(lm, dim=1)  # [N, 2]
         Pb = F.softmax(lb, dim=1)  # [N, K]
-        return segment, x, Pm, Pb
+        return seg, c, Pm, Pb
 
     def parameter_groups(self, weight_decay: dict):
         paramAll = self.parameters()
@@ -122,48 +146,56 @@ class BIRADsUNet(nn.Module, SegmentSupported):
 
 
 class ToyNetV1(BIRADsUNet):
-    def __init__(self, *args, coefficients: dict = None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, in_channel, *args, coefficients: dict = None, **kwargs):
+        super().__init__(in_channel, *args, **kwargs)
         if coefficients is None:
             coefficients = {}
         self.coefficients = defaultdict(lambda: 1, coefficients)
+        # TODO: weights might be moved to coefficients...
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
         self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
 
-        self.triplet = SemiHardTripletLoss(margin=self.coefficients.get("margin", 0.3),)
+        margin = self.coefficients.get("margin", 0.3)
+        self.triplet = SemiHardTripletLoss(margin=margin) if margin > 0 else None
 
     def _loss(self, X, Ym, Yb=None, mask=None, piter=0.0):
         """
         Protected for classes inherit from ToyNetV1.
         return: Original result, M-branch losses, B-branch losses.
         """
-        res = self.forward(X, segment=mask is not None, logit=True)
-        seg, embed, lm, lb = res
+        P_self_guide = piter ** 4
+
+        # allow mask guidance
+        if yes(P_self_guide):
+            # use segment result instead of ground-truth
+            res = self.forward(X, segment=mask is not None, logit=True)
+        elif mask is not None:
+            # use ground-truth as guidance
+            res = self.forward(X, mask=mask, logit=True)
+        else:
+            res = self.forward(X, segment=False, logit=True)
+
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
-        loss = {}
+        def lossInner(seg, embed, lm, lb):
+            loss = {"pm": F.cross_entropy(lm, Ym, weight=self.mweight,)}
 
-        # if torch.rand(1) < 0.5 + piter:
-        #     # allow mask guidance
-        #     if torch.rand(1) < piter ** 4:
-        #         # use segment result instead of ground-truth
-        #         _, _, guide_pm, guide_pb = self.forward(X, mask=seg, segment=False)
-        #     elif mask is not None:
-        #         # use ground-truth as guidance
-        #         _, _, guide_pm, guide_pb = self.forward(X, mask=mask, segment=False)
+            if mask is not None and seg is not None:
+                loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
 
-        loss["pm"] = focal_smooth_ce(lm, Ym, gamma=0, smooth=0.1, weight=self.mweight,)
+            if Yb is not None:
+                loss["pb"] = focal_smooth_bce(
+                    lb, Yb, gamma=1 + piter, weight=self.bweight
+                )
 
-        if seg is not None:
-            loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
+            if self.triplet:
+                mcount = torch.bincount(Ym)
+                if len(mcount) == 2 and mcount[0] > 0:
+                    loss["tm"] = self.triplet(embed, Ym)
+                # TODO: triplet of BIRADs
+            return loss
 
-        if Yb is not None:
-            loss["pb"] = focal_smooth_bce(lb, Yb, gamma=1 + piter, weight=self.bweight)
-
-        mcount = torch.bincount(Ym)
-        if len(mcount) == 2 and mcount[0] > 0:
-            loss["tm"] = self.triplet(embed, Ym)
-        # TODO: triplet of BIRADs
+        loss = lossInner(*res)
         return res, loss
 
     def lossWithResult(self, *args, **argv):
@@ -173,6 +205,8 @@ class ToyNetV1(BIRADsUNet):
             "tm": "m/triplet",
             "seg": "segment-mse",
             "pb": "b/CE",
+            "gpm": "m-guided/CE",
+            "gtm": "m-guided/triplet",
             # 'tb': 'b/triplet'
         }
         cum_loss = 0

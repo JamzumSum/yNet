@@ -23,13 +23,17 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
 
     def setup(self, stage=None):
         datasets = [
-            CachedDatasetGroup("./data/{setname}/{setname}.pt".format(setname=i), self.device)
+            CachedDatasetGroup(
+                "./data/{setname}/{setname}.pt".format(setname=i), self.device
+            )
             for i in self.sets
         ]
         self._ad = DistributedConcatSet(datasets, self.sets,)
         self._td, self._vd = classSpecSplit(self._ad, *self.tv,)
         print("trainset distribution:", self._td.distribution)
         print("validation distribution:", self._vd.distribution)
+        self.score_caption = ("validation", "testset")
+        
         if self.aimsize is None:
             self._tda = None
         else:

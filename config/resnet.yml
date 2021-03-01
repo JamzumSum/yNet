@@ -5,23 +5,30 @@ model:
     - resnet50  
   K: 6     # 2, 3, 4a, 4b, 4c, 5
 
-# training strategy
-training:  
-  device: cuda:0
-  continue: False
-  load_from: latest
-  max_epoch: 80
-  use_annotation_from: 30
-
+datasets:
+  - set2
+  - set3
+  - BUSI
+  
 optimizer:
   - Adam
   - lr: 5.0e-4
 
-scheduler:
-  factor: 0.2
-  patience: 2
-  verbose: True
-  cooldown: 8
+# trainer flag
+flag:
+  min_epochs: 40
+  max_epochs: 80
+  num_sanity_val_steps: 0
+  log_every_n_steps: 10
+  terminate_on_nan: True
+
+misc:
+  continue: False
+  load_from: latest
+  use_annotation_from: 0
+
+
+scheduler: null
 
 branch:
   default:
@@ -49,6 +56,7 @@ dataloader:
     batch_size: 16
     
 paths:
-  model_dir: model/resnet/resnet50
+  name: resnet
+  model_dir: model/resnet
   log_dir: log/resnet/{date}
   post_training: src/post_training.py

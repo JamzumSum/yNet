@@ -11,9 +11,9 @@ from math import exp as mathexp
 
 import torch
 import torch.nn as nn
-from common.utils import freeze
+from common import freeze
 
-from common.loss import F, focal_smooth_loss
+from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from .toynetv1 import ToyNetV1
 from .discriminator import WithCD
 

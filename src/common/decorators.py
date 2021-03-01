@@ -3,7 +3,7 @@ from functools import wraps
 import torch
 from collections import defaultdict
 from torch.utils.checkpoint import checkpoint
-from .utils import deep_merge
+from .utils import deep_collate
 
 def checkpointed(func, **kwargs):
     @wraps(func)
@@ -31,6 +31,6 @@ def Batched(func, bar=None):
     @wraps(func)
     def thatinloader(loader, **kwargs):
         res = [func(d, **kwargs) for d in loader]
-        return deep_merge(res)
+        return deep_collate(res)
             
     return thatinloader

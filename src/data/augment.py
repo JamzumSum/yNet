@@ -4,6 +4,7 @@ from random import choice
 import torch
 import torch.nn.functional as F
 from common import unsqueeze_as
+from common.support import DeviceAwareness
 from cv2 import getGaussianKernel
 
 from .dataset import Distributed, DistributedConcatSet
@@ -16,14 +17,12 @@ class VirtualDataset(Distributed, ABC):
         raise NotImplementedError("Virual datasets cannot be query.")
 
 
-class AugmentSet(VirtualDataset, ABC):
+class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
     def __init__(
         self, dataset: Distributed, distrib_title: str, aim_size=None, device=None
     ):
         self.dataset = dataset
-        if device is None:
-            device = "gpu" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device)
+        DeviceAwareness.__init__(self, device)
         assert not all(
             isinstance(i, dict) for i in dataset.meta.values()
         ), "Augment source set must be uniform."

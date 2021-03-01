@@ -84,8 +84,6 @@ class FixLoader(DataLoader, DeviceAwareness):
             sampler=(ChainSubsetRandomSampler if shuffle else SequentialSampler)(
                 dataset
             ),
-            pin_memory="cuda" == self.device.type,
-            # num_workers=cpu_count()
         )
         if drop_last:
             self.filter, self.padding = ElasticAugmentSet.getFilter(4)

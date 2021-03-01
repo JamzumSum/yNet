@@ -1,19 +1,19 @@
 import torch
 import torch.nn.functional as F
 import torchvision.models.resnet as resnet
-from common.loss import focalBCE
+from common.loss import focal_smooth_bce
 
 class Resx2(torch.nn.Module):
     '''
     A naive holder of two ResNet. 
     Support: resnet18, resnet34, resnet50, resnet101, resnet152
     '''
-    def __init__(self, K, model='resnet50', a=1.):
+    def __init__(self, K, model='resnet50', coefficients={}):
         torch.nn.Module.__init__(self)
         if isinstance(model, str): model = (model, model)
         self.mbranch = getattr(resnet, model[0])(num_classes=2)
         self.bbranch = getattr(resnet, model[1])(num_classes=K)
-        self.a = a
+        self.coefficients = coefficients
 
     def forward(self, X):
         return self.mbranch(X), self.bbranch(X)

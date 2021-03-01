@@ -11,15 +11,11 @@ import torch
 import torch.nn.functional as F
 
 from common.loss import diceCoefficient
-from common.optimizer import ReduceLROnPlateau, no_decay, get_arg_default
+from common.optimizer import ReduceLROnPlateau, get_arg_default, no_decay
 from common.support import *
-from common.trainer.fsm import FSMBase, pl
-from common.utils import deep_merge, gray2JET, unsqueeze_as
+from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
+from common.utils import deep_collate, gray2JET, morph_close, unsqueeze_as
 from misc.dict import shallow_update
-
-lenn = lambda x: len(x) if x else 0
-first = lambda it: next(iter(it))
-
 
 plateau_lr_dic = lambda sg, monitor: {
     "scheduler": sg,
@@ -30,9 +26,20 @@ plateau_lr_dic = lambda sg, monitor: {
 
 
 class ToyNetTrainer(FSMBase):
-    def __init__(self, Net, conf):
-        super().__init__(Net, conf)
-        self.branch_conf = conf["branch"]
+    def __init__(
+        self,
+        Net,
+        model_conf: DictConfig,
+        misc: DictConfig,
+        paths: DictConfig,
+        op_conf: ListConfig,
+        sg_conf: DictConfig,
+        branch_conf: DictConfig,
+    ):
+        self.branch_conf = branch_conf
+        super().__init__(
+            Net, model_conf, misc, paths, op_conf, sg_conf,
+        )
 
         self.discardYbEpoch = self.misc.get("use_annotation_from", 0)
         self.flood = self.misc.get("flood", 0)
@@ -43,6 +50,9 @@ class ToyNetTrainer(FSMBase):
 
         self.example_input_array = torch.randn((2, 1, 512, 512))
         self.acc = pl.metrics.Accuracy()
+
+    def save_hyperparameters(self):
+        super().save_hyperparameters(branch=self.branch_conf)
 
     def forward(self, X):
         return self.net(X)
@@ -59,8 +69,8 @@ class ToyNetTrainer(FSMBase):
                 self.sg_conf, d.get("scheduler", self.sg_conf), True
             )
 
-        default_decay = get_arg_default(self.op_name.__init__, "weight_decay")
-        default_lr = get_arg_default(self.op_name.__init__, 'lr')
+        default_decay = get_arg_default(self.op_cls.__init__, "weight_decay")
+        default_lr = get_arg_default(self.op_cls.__init__, "lr")
         weight_decay = {
             k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
         }
@@ -71,11 +81,11 @@ class ToyNetTrainer(FSMBase):
 
         mop_param_key = ["M", "M_no_decay", "B", "B_no_decay"]
         mop_param = [paramdic[k] for k in mop_param_key if k in paramdic]
-        mop = self.op_name(mop_param, **self.op_conf)
+        mop = self.op_cls(mop_param, **self.op_conf)
         ops = [mop]
         if self.adversarial:
             dop_param = [v for k, v in paramdic.items() if k not in mop_param_key]
-            ops.append(self.op_name(dop_param, **self.op_conf))
+            ops.append(self.op_cls(dop_param, **self.op_conf))
 
         if not any(sg_arg.values()):
             return ops
@@ -149,6 +159,7 @@ class ToyNetTrainer(FSMBase):
 
         if mask is not None:
             res["dice"] = diceCoefficient(seg, mask, reduction="none")
+            res["closed-dice"] = diceCoefficient(morph_close(seg), mask, reduction='none')
 
         if Yb is not None:
             res["yb"] = Yb
@@ -164,7 +175,7 @@ class ToyNetTrainer(FSMBase):
             )
 
         if batch_idx == 0:
-            self.log_images(X[:8], self.test_caption[dataloader_idx])
+            self.log_images(X[:8], self.score_caption[dataloader_idx])
         return res
 
     def score_epoch_end(self, res: list):
@@ -178,8 +189,8 @@ class ToyNetTrainer(FSMBase):
         }
 
         for dataset_idx, res in enumerate(res):
-            res = deep_merge(res)
-            caption = self.test_caption[dataset_idx]
+            res = deep_collate(res)
+            caption = self.score_caption[dataset_idx]
 
             self.logger.experiment.add_embedding(
                 res["c"],
@@ -190,6 +201,7 @@ class ToyNetTrainer(FSMBase):
 
             if self.logSegmap and "dice" in res:
                 self.log("dice/%s" % caption, res["dice"].mean(), logger=True)
+                self.log("dice/MORPH_CLOSE/%s" % caption, res["closed-dice"].mean(), logger=True)
 
             for k, (p, y) in items.items():
                 if y not in res:

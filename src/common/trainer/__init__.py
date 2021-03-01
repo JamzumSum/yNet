@@ -5,12 +5,12 @@ A universial trainer ready to be inherited.
 * create: 2021-1-12
 """
 import os
-from collections import defaultdict
 from datetime import date
 
 import pytorch_lightning as pl
 import torch
 from data.plsupport import DPLSet
+from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
@@ -18,67 +18,87 @@ from .richbar import RichProgressBar
 
 
 class Trainer(pl.Trainer):
-    def __init__(self, FSM, Net: torch.nn.Module, conf: dict):
-        conf = defaultdict(dict, conf)
+    def __init__(self, misc, paths, flag):
+        self.misc = misc
+        self.paths = paths
+        self.name = paths.get("name", "default")
 
-        self.cls_name = Net.__name__
-        self.misc = conf["misc"]
-        self.paths = conf["paths"]
+        checkpoint_callback = self._getCheckpointCallback()
+        pl.Trainer.__init__(
+            self,
+            callbacks=[checkpoint_callback, RichProgressBar()],
+            default_root_dir=checkpoint_callback.dirpath,
+            logger=self._getTensorBoardLogger(),
+            **flag
+        )
 
+    def _getTensorBoardLogger(self):
+        log_dir = self.paths.get("log_dir", os.path.join("log", self.name)).format(
+            date=date.today().strftime("%m%d")
+        )
+        return TensorBoardLogger(
+            log_dir, self.name, log_graph=True, default_hp_metric=False
+        )
+
+    def _getCheckpointCallback(self):
+        model_dir = self.paths.get(
+            "model_dir", os.path.join("model", self.name)
+        ).format(date=date.today().strftime("%m%d"))
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
-            dirpath=self.model_dir,
+            dirpath=model_dir,
             filename="best",
             save_last=True,
             mode="min",
         )
         checkpoint_callback.FILE_EXTENSION = ".pt"
-        checkpoint_callback.best_model_path = self.model_dir
+        checkpoint_callback.best_model_path = model_dir
         checkpoint_callback.CHECKPOINT_NAME_LAST = "latest"
+        return checkpoint_callback
 
-        board = TensorBoardLogger(
-            self.log_dir, self.name, log_graph=True, default_hp_metric=False
-        )
 
-        pl.Trainer.__init__(
-            self,
-            callbacks=[checkpoint_callback, RichProgressBar()],
-            default_root_dir=self.model_dir,
-            logger=board,
-            **conf["flag"]
-        )
+def getConfig(path) -> DictConfig:
+    d = OmegaConf.load(path)
+    if "import" in d:
+        path = os.path.join(os.path.dirname(path), d.pop("import"))
+        imd = getConfig(path)
+        return OmegaConf.merge(imd, d)
+    else:
+        return d
 
-        self.net = FSM(Net, conf)
-        self.ds = DPLSet(
-            conf["dataloader"],
-            conf["datasets"],
-            (8, 2),
-            self.misc.get("augment", None),
-            {"GPU": "cuda", "CPU": "cpu"}[self._device_type],
-        )
-        self.net.test_caption = ["validation", "testset"]
 
-        self.ds.prepare_data()
-        self.ds.setup()
+def getTrainComponents(FSM, Net, conf_path):
+    """
+    Given the config in all, construct 3 key components for training, 
+    which are all initialed with minimal config sections.
 
-    def fit(self, model=None):
-        return pl.Trainer.fit(self, model or self.net, datamodule=self.ds)
+    return:
+        Trainer
+        LightningModule
+        LightningDataModule
+    """
+    conf = getConfig(conf_path)
+    trainer = Trainer(conf.misc, conf.paths, conf.flag)
 
-    def tune(self, model=None):
-        return pl.Trainer.tune(self, model or self.net, datamodule=self.ds)
+    datamodule = DPLSet(
+        conf.dataloader,
+        conf.datasets,
+        (8, 2),
+        conf.misc.get("augment", None),
+        "cpu" if not trainer.gpus else "cuda",
+    )
+    datamodule.prepare_data()
+    datamodule.setup()
 
-    @property
-    def log_dir(self) -> str:
-        return self.paths.get("log_dir", os.path.join("log", self.cls_name)).format(
-            date=date.today().strftime("%m%d")
-        )
+    net = FSM(
+        Net,
+        conf.model,
+        conf.misc,
+        conf.paths,
+        conf.optimizer,
+        conf.scheduler,
+        conf.branch,
+    )
+    net.score_caption = datamodule.score_caption
 
-    @property
-    def model_dir(self):
-        return self.paths.get("model_dir", os.path.join("model", self.cls_name)).format(
-            date=date.today().strftime("%m%d")
-        )
-
-    @property
-    def name(self):
-        return self.paths.get("name", "default")
+    return trainer, net, datamodule

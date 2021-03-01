@@ -67,7 +67,7 @@ class UNetWOHeader(nn.Module):
     [N, ic, H, W] -> [N, fc * 2^level, H, W], [N, fc, H, W]
     '''
     def __init__(self, ic, level=4, fc=64, inner_res=False, memory_trade=False):
-        nn.Module.__init__(self)
+        super().__init__()
         self.level = level
         self.cps = CheckpointSupport(memory_trade)
         self.fc = fc
@@ -153,9 +153,3 @@ class UNet(UNetWOHeader):
 
         act = [self.sigma(f(finalx)) for f in self.headers]
         return (bottomx, *act)
-
-if __name__ == "__main__":
-    unet = UNet(3, 1, 16)
-    x = torch.randn(2, 3, 512, 512)
-    y = unet(x)
-    print(i.shape for i in y)
