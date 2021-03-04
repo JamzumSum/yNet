@@ -15,7 +15,6 @@ class FSMBase(pl.LightningModule, ABC):
         Net,
         model_conf: DictConfig,
         misc: DictConfig,
-        paths: DictConfig,
         op_conf: OmegaConf,
         sg_conf: DictConfig,
     ):
@@ -24,13 +23,12 @@ class FSMBase(pl.LightningModule, ABC):
 
         self.cls_name = Net.__name__
 
-        self.paths = paths
         self.misc = misc
         self.sg_conf = sg_conf
         self.model_conf = model_conf
 
         if OmegaConf.is_dict(op_conf):
-            self.op_cls = getattr(torch.optim, op_conf.pop('name', 'SGD'))
+            self.op_cls = getattr(torch.optim, op_conf.pop("name", "SGD"))
             self.op_conf = op_conf
         elif OmegaConf.is_list(op_conf):
             self.op_cls = getattr(torch.optim, op_conf[0])
@@ -38,22 +36,12 @@ class FSMBase(pl.LightningModule, ABC):
 
         self.net = Net(**model_conf)
 
-        if self.misc.get("continue", True):
-            self._load()
-        else:
-            self.seed = int(
-                torch.empty((), dtype=torch.int64).random_(4294967295).item()
-            )
-            self.save_hyperparameters()
-        pl.utilities.seed.seed_everything(self.seed)
-
     def save_hyperparameters(self, **otherconf):
         conf = {
-           'model': self.model_conf, 
-           'misc': self.misc,
-           'paths': self.paths,
-           'optimizer': [self.op_cls.__name__, self.op_conf],
-            'scheduler': self.sg_conf
+            "model": self.model_conf,
+            "misc": self.misc,
+            "optimizer": [self.op_cls.__name__, self.op_conf],
+            "scheduler": self.sg_conf,
         }
         conf.update(otherconf)
         # BUG: subclass must inherit save_hyperparameters
@@ -69,19 +57,11 @@ class FSMBase(pl.LightningModule, ABC):
 
     @property
     def piter(self):
-        '''
+        """
         current_epoch / max_epochs.
         Call this only when training/testing.
-        '''
+        """
         return self.current_epoch / self.trainer.max_epochs
-
-    def _load(self):
-        model_dir = self.paths.get("model_dir", os.path.join("model", self.cls_name)).format(
-            date=date.today().strftime("%m%d")
-        )
-        name = self.misc.get("load_from", "latest") + ".pt"
-        path = os.path.join(model_dir, name)
-        self.load_from_checkpoint(path)
 
     ###########################################################################
     ######################## hooks defined below ##############################

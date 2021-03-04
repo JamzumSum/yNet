@@ -10,12 +10,13 @@ from warnings import warn
 import torch
 import torch.nn.functional as F
 
+from common import deep_collate, unsqueeze_as
 from common.loss import diceCoefficient
 from common.optimizer import ReduceLROnPlateau, get_arg_default, no_decay
 from common.support import *
 from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
-from common.utils import deep_collate, gray2JET, morph_close, unsqueeze_as
-from misc.dict import shallow_update
+from common.utils import gray2JET, morph_close
+from misc.updatedict import shallow_update
 
 plateau_lr_dic = lambda sg, monitor: {
     "scheduler": sg,
@@ -31,14 +32,13 @@ class ToyNetTrainer(FSMBase):
         Net,
         model_conf: DictConfig,
         misc: DictConfig,
-        paths: DictConfig,
         op_conf: ListConfig,
         sg_conf: DictConfig,
         branch_conf: DictConfig,
     ):
         self.branch_conf = branch_conf
         super().__init__(
-            Net, model_conf, misc, paths, op_conf, sg_conf,
+            Net, model_conf, misc, op_conf, sg_conf,
         )
 
         self.discardYbEpoch = self.misc.get("use_annotation_from", 0)

@@ -10,6 +10,7 @@ from itertools import chain
 import torch
 import torch.nn as nn
 from common import freeze, unsqueeze_as
+from common.decorators import NoGrad
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import SemiHardTripletLoss
 from common.support import *
@@ -59,7 +60,7 @@ class BIRADsUNet(nn.Module, SegmentSupported):
             cc = mls[-1].oc
 
         self.ypath = nn.Sequential(*mls)
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool = nn.AdaptiveAvgPool2d(1)
         self.mfc = nn.Linear(cc, 2)
         self.bfc = nn.Linear(cc, K)
         self.dropout = nn.Dropout(dropout)
@@ -77,7 +78,7 @@ class BIRADsUNet(nn.Module, SegmentSupported):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(self, X, mask=None, segment=True, classify=True, logit=False):
+    def forward(self, X, mask=None, segment=True, classify=True, logit=False, pad_mode='segment'):
         """
         args: 
             X: [N, ic, H, W]
@@ -86,31 +87,43 @@ class BIRADsUNet(nn.Module, SegmentSupported):
             segment: if true, the whole unet will be inferenced to generate a segment map.
             classify: if true, the ypath is inferenced to get classification result.
             logit: skip softmax for some losses that needn't that.
+            pad_mode: how to generate feature for the second plcaeholder. 
+                `segment`: If map not given, force segment current X. Then use the segment map to generate feature.
+                `zero`: Set the second placeholder as 0. A little like dropout.
+                `copy`: Set the second placeholder same as the first. Risk of overfitting.
         return: 
             segment map  [N, 2, H, W]. return this alone if `segment but not classify`
             x: bottom of unet feature. [N, fc * 2^ul]
             Pm        [N, 2]
             Pb        [N, K]
         """
-        if not segment and mask is None:
-            with torch.no_grad():
-                c, seg = self.unet(X, True)
-        else:
-            c, seg = self.unet(X, mask is None or segment)
+        c, seg = self.unet(X, mask is None or segment)
 
         if not classify:
             return seg
 
-        if mask is None:
-            mask = morph_close(seg.detach())
+        def from_segment():
+            nonlocal mask, seg, X
+            with torch.no_grad():
+                if mask is None:
+                    mask = morph_close(seg)
+                X = X * mask.clamp(0.3, 1)
+            return self.unet(X, False)[0]
+        def zero_padding():
+            nonlocal c
+            return torch.zeros_like(c)
+        def copy_it():
+            nonlocal c
+            return c.copy()
+        cg = {'segment': from_segment, 'zero': zero_padding, 'copy': copy_it}[pad_mode]()
 
-        cg, _ = self.unet(X * mask.clamp(0.3, 1), False)
+        # NOTE: Two placeholders c & cg
         c = torch.cat((c, cg), dim=1)  # [N, fc * 2^(ul + 1), H, W]
 
         if self.ylevel:
             c = self.ypath(c)
 
-        c = self.pool(c).squeeze(2).squeeze(2)  # [N, fc * 2^(ul + yl + 1)]
+        c = self.pool(c)[..., 0, 0]  # [N, fc * 2^(ul + yl + 1)]
         x = self.dropout(c)
         lm = self.mfc(x)
         lb = self.bfc(x)
@@ -123,7 +136,6 @@ class BIRADsUNet(nn.Module, SegmentSupported):
 
     def parameter_groups(self, weight_decay: dict):
         paramAll = self.parameters()
-        torch.optim
         paramB = tuple(self.bfc.parameters())
         paramM = tuple(p for p in paramAll if id(p) not in [id(i) for i in paramB])
         need_decay = []
@@ -146,10 +158,10 @@ class BIRADsUNet(nn.Module, SegmentSupported):
 
 
 class ToyNetV1(BIRADsUNet):
-    def __init__(self, in_channel, *args, coefficients: dict = None, **kwargs):
+    __version__ = (1, 0)
+
+    def __init__(self, in_channel, *args, coefficients={}, **kwargs):
         super().__init__(in_channel, *args, **kwargs)
-        if coefficients is None:
-            coefficients = {}
         self.coefficients = defaultdict(lambda: 1, coefficients)
         # TODO: weights might be moved to coefficients...
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
@@ -227,6 +239,6 @@ class ToyNetV1(BIRADsUNet):
         """
         return self.lossWithResult(*args, **argv)[1:]
 
-    @staticmethod
-    def WCDVer():
-        return WithCD(ToyNetV1)
+    @classmethod
+    def WCDVer(cls):
+        return WithCD(cls)

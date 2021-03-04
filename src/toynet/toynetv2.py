@@ -50,13 +50,16 @@ class JointEstimator(nn.Sequential):
         return rel
 
 class ToyNetV2(ToyNetV1):
+    __version__ = (2, 0)
+
     def __init__(self, ishape, K, patch_size, fc=64, b=0.5):
         ToyNetV1.__init__(self, ishape, K, patch_size, fc)
         self.Q = JointEstimator(K)
         self.b = b
 
-    def parameter_groups(self):
-        paramM, paramB = ToyNetV1.parameter_groups(self)
+    def parameter_groups(self, weight_decay: dict):
+        raise NotImplementedError
+        paramM, paramB = ToyNetV1.parameter_groups(self, weight_decay)
         return paramM, chain(paramB, self.Q.parameters())
 
     def _loss(self, X, Ym, Yb=None, piter=0., *args, **argv):
@@ -93,6 +96,3 @@ class ToyNetV2(ToyNetV1):
         summary['interbranch/mutual_info'] = info
 
         return res, loss + warmup * info, summary
-
-    @staticmethod
-    def WCDVer(): return WithCD(ToyNetV2)

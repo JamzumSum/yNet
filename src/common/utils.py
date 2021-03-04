@@ -1,10 +1,11 @@
 from itertools import product
-from collections import defaultdict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from . import unsqueeze_as
+from .decorators import NoGrad
 
 
 @torch.jit.script
@@ -206,34 +207,128 @@ class PyramidPooling(nn.Module):
         return self.atn(ls)
 
 
-def deep_collate(out_ls: list):
-    if not out_ls or out_ls[0] is None:
-        return
-
-    resdic = defaultdict(list)
-    for r in out_ls:
-        if isinstance(r, dict):
-            gen = r.items()
-        elif isinstance(r, (list, tuple)):
-            gen = enumerate(r)
-        for j, t in gen:
-            resdic[j].append(t)
-    for k, v in resdic.items():
-        f = torch.cat if v[0].dim() > 0 else torch.stack
-        resdic[k] = f(v, dim=0)
-
-    if isinstance(r, dict):
-        return dict(resdic)
-    elif isinstance(r, (list, tuple)):
-        return tuple(resdic[i] for i in range(len(resdic)))
-
-
 def morph_close(X, kernel=3, iteration=1):
     # type: (Tensor, int, int) -> Tensor
     assert kernel & 1
     mp = torch.nn.MaxPool2d(kernel, 1, (kernel - 1) // 2)
 
     for _ in range(iteration):
-        X = -mp(-mp(X))
+        X = -mp.forward(-mp.forward(X))
 
     return X
+
+
+class BoundingBoxCrop(nn.Module):
+    def __init__(self, threshold_rate, unit_scale=1):
+        super().__init__()
+        self.tr = threshold_rate
+        self.register_buffer(
+            "unit",
+            torch.IntTensor(
+                (unit_scale, unit_scale) if isinstance(unit_scale, int) else unit_scale
+            ),
+        )
+
+    @staticmethod
+    def wh(box):
+        return box[..., 2:] - box[..., :2]
+
+    @staticmethod
+    def crop(X, box):
+        """
+        Arg:
+            X: [H, W]
+            box: [4]
+        return:
+            [h, w]
+        """
+        return X[box[1] : box[3], box[0] : box[2]]
+
+    def unitwh(self, box):
+        """
+        args:
+            box: [N*C, 4]. (x_min, y_min, x_max, y_max)
+        return:
+            wh: [N*C, 2]
+        """
+        wh = self.wh(box)  # [N*C, 2]
+        wh = (wh / self.unit).ceil()
+        wh[wh == 0] = 1
+        wh = wh * self.unit
+        return wh.int()
+
+    def finebox(self, BX, box):
+        """
+        args:
+            BX: [N*C, H, W]
+            box/ubox: [N*C, 4]. (x_min, y_min, x_max, y_max)
+        return:
+            finebox: [N*C, 4]
+        """
+        uwh = self.unitwh(box)
+        wh = self.wh(box)
+        extra_wh = uwh - wh  # [N*C, 2]
+        extra_wh[extra_wh < 0] = 0
+        extra_box = box  # [N*C, 4]
+        extra_box[:, :2] -= extra_wh
+        extra_box[:, 2:] += extra_wh
+        extra_box[extra_box < 0] = 0
+
+        finebox = []
+        for xi, bi, uwhi in zip(BX, extra_box, uwh):
+            extra_crop = self.crop(xi, bi)  # [H, W]
+            ker = (min(extra_crop.size(0), uwhi[1]), min(extra_crop.size(1), uwhi[0]))
+            xmap = F.avg_pool2d(extra_crop.unsqueeze(0), ker, 1).squeeze(0)
+            x_min = bi[0] + xmap.max(dim=0).values.argmax()
+            y_min = bi[1] + xmap.max(dim=1).values.argmax()
+            x_max = x_min + uwhi[0]
+            y_max = y_min + uwhi[1]
+            finebox.append(torch.stack((x_min, y_min, x_max, y_max)))
+        return torch.stack(finebox)
+
+    def selectCrop(self, X, box, thresh) -> list:
+        """
+        box: [N*C, 4]. (x_min, y_min, x_max, y_max)
+        """
+        BX = X
+        BX[BX >= thresh] = 1.0
+        box = self.finebox(BX, box)
+        return [self.crop(xi, bi) for xi, bi in zip(X, box)]
+
+    def selectThresh(self, X):
+        # TODO
+        return X.min() + (X.max() - X.min()) * self.tr
+
+    @NoGrad
+    def forward(self, X):
+        """
+        X: [N, C, H, W]
+        return:
+            N * [C * [h, w]]
+        """
+        N, C, H, W = X.shape
+        X = X.reshape(N * C, H, W)
+        thresh = self.selectThresh(X)
+        BX = X >= thresh
+        y = torch.empty(1, H, dtype=torch.int)
+        y[0, :] = torch.arange(H, dtype=torch.int)
+        x = torch.empty(1, W, dtype=torch.int)
+        x[0, :] = torch.arange(W, dtype=torch.int)
+
+        x = BX.sum(dim=-2).bool() * x  # [N*C, W]
+        y = BX.sum(dim=-1).bool() * y  # [N*C, H]
+
+        def mine0(t, dim):
+            inf = t.max() + 1
+            t[t == 0] = inf
+            return torch.argmin(t, dim)
+
+        y_max = torch.argmax(y, dim=-1)  # [N*C]
+        y_min = mine0(y, dim=-1)
+        x_max = torch.argmax(x, dim=-1)
+        x_min = mine0(x, dim=-1)
+
+        box = torch.stack((x_min, y_min, x_max, y_max), dim=-1)  # [N*C, 4]
+        crop = self.selectCrop(X, box, thresh)
+        return [crop[i : i + C] for i in range(0, N * C, C)]
+

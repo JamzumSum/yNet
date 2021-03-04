@@ -18,6 +18,9 @@ class VirtualDataset(Distributed, ABC):
 
 
 class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
+    # BUG: Use cuda to augment data is necessary to some extent but conflicts with multiprocessing
+    # in most times. I've not found a method to adopt the both. 
+    # see warning in https://pytorch.org/docs/stable/data.html#multi-process-data-loading
     def __init__(
         self, dataset: Distributed, distrib_title: str, aim_size=None, device=None
     ):

@@ -4,8 +4,9 @@ from random import choices
 from random import shuffle as shuffle_
 
 import torch
+import torch.multiprocessing as mp
+from common import deep_collate
 from common.support import DeviceAwareness
-from torch.multiprocessing import cpu_count
 from torch.utils.data import (
     ConcatDataset,
     DataLoader,
@@ -16,6 +17,7 @@ from torch.utils.data import (
 
 from .augment import ElasticAugmentSet
 
+mp.set_start_method("spawn", True)
 merge_list = lambda l: sum(l, [])
 
 
@@ -25,7 +27,7 @@ class CumulativeRandomSampler(RandomSampler):
         RandomSampler.__init__(self, *args, **kwargs)
 
     def __iter__(self):
-        return (self.a + i for i in RandomSampler.__iter__(self))
+        return (self.a + i for i in super().__iter__())
 
 
 class ChainSubsetRandomSampler(Sampler[int]):
@@ -71,19 +73,22 @@ class FixLoader(DataLoader, DeviceAwareness):
         shuffle=False,
         drop_last=False,
         device=None,
+        spawn=True,
         **otherconf
     ):
         DeviceAwareness.__init__(self, device)
+        sampler_cls = ChainSubsetRandomSampler if shuffle else SequentialSampler
         DataLoader.__init__(
             self,
             dataset,
             batch_size,
             **otherconf,
+            pin_memory=False,
             drop_last=drop_last,
             collate_fn=self.fixCollate,
-            sampler=(ChainSubsetRandomSampler if shuffle else SequentialSampler)(
-                dataset
-            ),
+            # TODO: maybe batch_sampler in the future
+            sampler=sampler_cls(dataset),
+            num_workers=mp.cpu_count() if spawn else 0,
         )
         if drop_last:
             self.filter, self.padding = ElasticAugmentSet.getFilter(4)
@@ -117,7 +122,7 @@ class FixLoader(DataLoader, DeviceAwareness):
         if self.drop_last:
             x = self.augmentFromBatch(x, N)
 
-        x = {k: torch.stack([i[k] for i in x]) for k in x[0]}
+        x = deep_collate(x, True)
         x.setdefault("Yb", None)
         x.setdefault("mask", None)
         return x
