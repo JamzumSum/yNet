@@ -14,18 +14,20 @@ from common.decorators import NoGrad
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import SemiHardTripletLoss
 from common.support import *
-from common.utils import morph_close
+from common.utils import BoundingBoxCrop, morph_close
+from misc import CoefficientScheduler as CSG
 
 from .discriminator import WithCD
-from .unet import ConvStack2, DownConv, UNet
+from .unet import ConvStack2, DownConv, UNet, norm_layer
 
 yes = lambda p: torch.rand(()) < p
 
 
-class BIRADsUNet(nn.Module, SegmentSupported):
+class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
     """
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     """
+    norm = "groupnorm"
 
     def __init__(
         self,
@@ -46,29 +48,39 @@ class BIRADsUNet(nn.Module, SegmentSupported):
             level=ulevel,
             inner_res=True,
             memory_trade=memory_trade,
+            norm="groupnorm",
         )
         self.memory_trade = memory_trade
         self.ylevel = ylevel
 
-        cc = 2 * self.unet.fc * 2 ** self.unet.level
+        cc = self.unet.oc * 2  # 2x channel for 2 placeholders
         mls = []
         for i in range(ylevel << 1):
             if i & 1:
-                mls.append(ConvStack2(cc, oc=cc * 2, res=True))
+                mls.append(ConvStack2(cc, oc=cc * 2, res=True, norm=self.norm))
             else:
                 mls.append(DownConv(cc))
             cc = mls[-1].oc
 
         self.ypath = nn.Sequential(*mls)
         self.pool = nn.AdaptiveAvgPool2d(1)
+        self.norm_layer = norm_layer(self.norm, cc)
         self.mfc = nn.Linear(cc, 2)
         self.bfc = nn.Linear(cc, K)
         self.dropout = nn.Dropout(dropout)
-        self.initParameter()
+        self.selfInit()
 
-    def initParameter(self, zero_init_residual=False):
+    @property
+    def max_depth(self):
+        return self.unet.level + self.ylevel
+
+    def selfInit(self, zero_init_residual=False):
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
+            if isinstance(m, SelfInitialed):
+                if m is self:
+                    continue
+                m.selfInit()
+            elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
@@ -78,7 +90,9 @@ class BIRADsUNet(nn.Module, SegmentSupported):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(self, X, mask=None, segment=True, classify=True, logit=False, pad_mode='segment'):
+    def forward(
+        self, X, mask=None, segment=True, classify=True, logit=False, pad_mode="zero"
+    ):
         """
         args: 
             X: [N, ic, H, W]
@@ -91,94 +105,137 @@ class BIRADsUNet(nn.Module, SegmentSupported):
                 `segment`: If map not given, force segment current X. Then use the segment map to generate feature.
                 `zero`: Set the second placeholder as 0. A little like dropout.
                 `copy`: Set the second placeholder same as the first. Risk of overfitting.
+                `roi`: Crop images according to segment and pass them to unet to get another placeholder. 
         return: 
             segment map  [N, 2, H, W]. return this alone if `segment but not classify`
             x: bottom of unet feature. [N, fc * 2^ul]
             Pm        [N, 2]
             Pb        [N, K]
         """
-        c, seg = self.unet(X, mask is None or segment)
+        if mask is None or segment:
+            c, seg = self.unet(X)
+        else:
+            c = self.unet(X, False)
 
         if not classify:
             return seg
 
-        def from_segment():
-            nonlocal mask, seg, X
+        # TODO: move these to class method
+        def from_segment(X, seg, c, mask):  # All test failed. probability collapsed.
             with torch.no_grad():
                 if mask is None:
                     mask = morph_close(seg)
                 X = X * mask.clamp(0.3, 1)
-            return self.unet(X, False)[0]
-        def zero_padding():
-            nonlocal c
+            return self.unet(X, False)
+
+        def roi_extract(X, seg, c, mask):
+            raise NotImplementedError
+            with torch.no_grad():
+                if mask is None:
+                    mask = morph_close(seg)
+                Xl = BoundingBoxCrop(0.5, 2 ** self.max_depth)(mask, X)  # N * [C, h, w]
+            # TODO BUG: enter inference mode when using BN
+            # or use GroupNorm if possible...
+            return torch.cat([self.unet(xi.unsqueeze(0), False) for xi in Xl])
+
+        def zero_padding(X, seg, c, mask):
+            # 0304: Test passed. Prove that placeholders are working.
             return torch.zeros_like(c)
-        def copy_it():
-            nonlocal c
+
+        def copy_it(X, seg, c, mask):
             return c.copy()
-        cg = {'segment': from_segment, 'zero': zero_padding, 'copy': copy_it}[pad_mode]()
+
+        cg = {
+            "segment": from_segment,
+            "zero": zero_padding,
+            "copy": copy_it,
+            "roi": roi_extract,
+        }[pad_mode](X, seg, c, mask)
 
         # NOTE: Two placeholders c & cg
+        # TODO: what about a weight balancing the two placeholders?
+        #       Then the linear size can be reduced as 0.5x :D
         c = torch.cat((c, cg), dim=1)  # [N, fc * 2^(ul + 1), H, W]
 
         if self.ylevel:
             c = self.ypath(c)
 
         c = self.pool(c)[..., 0, 0]  # [N, fc * 2^(ul + yl + 1)]
-        x = self.dropout(c)
-        lm = self.mfc(x)
-        lb = self.bfc(x)
+
+        # normalize after triplet embedding extracting.
+        # See: A Strong Baseline and Batch Normalization Neck for Deep Person Re-identification
+        x = self.norm_layer(c)
+        x = self.dropout(x)
+        lm = self.mfc(x)  # [N, 2]
+        lb = self.bfc(x)  # [N, K]
         if logit:
             return seg, c, lm, lb
 
-        Pm = F.softmax(lm, dim=1)  # [N, 2]
-        Pb = F.softmax(lb, dim=1)  # [N, K]
+        Pm = F.softmax(lm, dim=1)
+        Pb = F.softmax(lb, dim=1)
         return seg, c, Pm, Pb
 
-    def parameter_groups(self, weight_decay: dict):
+    def branch_weight(self, weight_decay: dict):
+        """
+        args:
+            weight_decay: all keys should be in self.branches
+        exmaple: 
+            weight_decay: {
+                'M': True, 
+                'B': True
+            }
+        """
         paramAll = self.parameters()
         paramB = tuple(self.bfc.parameters())
         paramM = tuple(p for p in paramAll if id(p) not in [id(i) for i in paramB])
-        need_decay = []
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                need_decay.append(id(m.weight))
-            elif isinstance(m, nn.Linear):
-                need_decay.append(id(m.weight))
+        paramdic = {"M": paramM, "B": paramB}
+        # a param dict when not filter by `weight_decay`
+        if not any(weight_decay.values()):
+            return paramdic
 
-        paramdic = {}
-        for branch, param in {"M": paramM, "B": paramB}.items():
+        decay_weight_ge = defaultdict(
+            lambda: lambda m: [],
+            {nn.Conv2d: lambda m: [id(m.weight)], nn.Linear: lambda m: [id(m.weight)]},
+        )
+        need_decay = (decay_weight_ge[type(m)](m) for m in self.modules())
+        need_decay = sum(need_decay, [])
+
+        for branch, param in paramdic.copy().items():
             if weight_decay[branch]:
-                paramdic[branch] = (i for i in param if id(i) in need_decay)
                 paramdic[branch + "_no_decay"] = (
                     i for i in param if id(i) not in need_decay
                 )
+                paramdic[branch] = [i for i in param if id(i) in need_decay]
             else:
                 paramdic[branch] = param
         return paramdic
+
+    @property
+    def branches(self):
+        return ("M", "B")
 
 
 class ToyNetV1(BIRADsUNet):
     __version__ = (1, 0)
 
-    def __init__(self, in_channel, *args, coefficients={}, **kwargs):
+    def __init__(self, in_channel, *args, margin=0.3, **kwargs):
         super().__init__(in_channel, *args, **kwargs)
-        self.coefficients = defaultdict(lambda: 1, coefficients)
-        # TODO: weights might be moved to coefficients...
+        # TODO: weights should be set by config...
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
         self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
 
-        margin = self.coefficients.get("margin", 0.3)
         self.triplet = SemiHardTripletLoss(margin=margin) if margin > 0 else None
 
-    def _loss(self, X, Ym, Yb=None, mask=None, piter=0.0):
+    def _loss(self, cmgr: CSG, X, Ym, Yb=None, mask=None):
         """
         Protected for classes inherit from ToyNetV1.
         return: Original result, M-branch losses, B-branch losses.
         """
-        P_self_guide = piter ** 4
+        piter = cmgr.piter
+        probe_self_guide = cmgr.get('probe_self_guide', piter ** 4)
 
         # allow mask guidance
-        if yes(P_self_guide):
+        if yes(probe_self_guide):
             # use segment result instead of ground-truth
             res = self.forward(X, segment=mask is not None, logit=True)
         elif mask is not None:
@@ -193,11 +250,13 @@ class ToyNetV1(BIRADsUNet):
             loss = {"pm": F.cross_entropy(lm, Ym, weight=self.mweight,)}
 
             if mask is not None and seg is not None:
-                loss["seg"] = ((seg - mask) ** 2 * ((1 - piter ** 2) * mask + 1)).mean()
+                weight_focus_pos = cmgr.get('weight_focus_pos', 1 - piter ** 2)
+                loss["seg"] = ((seg - mask) ** 2 * (weight_focus_pos * mask + 1)).mean()
 
             if Yb is not None:
+                gamma_b = cmgr.get('gamma_b', piter + 1)
                 loss["pb"] = focal_smooth_bce(
-                    lb, Yb, gamma=1 + piter, weight=self.bweight
+                    lb, Yb, gamma=gamma_b, weight=self.bweight
                 )
 
             if self.triplet:
@@ -210,8 +269,8 @@ class ToyNetV1(BIRADsUNet):
         loss = lossInner(*res)
         return res, loss
 
-    def lossWithResult(self, *args, **argv):
-        res, loss = self._loss(*args, **argv)
+    def lossWithResult(self, cmgr: CSG, *args, **argv):
+        res, loss = self._loss(cmgr, *args, **argv)
         itemdic = {
             "pm": "m/CE",
             "tm": "m/triplet",
@@ -226,7 +285,8 @@ class ToyNetV1(BIRADsUNet):
         for k, v in itemdic.items():
             if k not in loss:
                 continue
-            cum_loss = cum_loss + loss[k] * self.coefficients[k]
+            # multi-task loss fusion
+            cum_loss = cum_loss + loss[k] * cmgr.get('task_' + k, 1)
             summary["loss/" + v] = loss[k].detach()
         return res, cum_loss, summary
 

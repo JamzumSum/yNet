@@ -73,9 +73,10 @@ class FixLoader(DataLoader, DeviceAwareness):
         shuffle=False,
         drop_last=False,
         device=None,
-        spawn=True,
+        spawn=False,
         **otherconf
     ):
+        if spawn: raise NotImplementedError
         DeviceAwareness.__init__(self, device)
         sampler_cls = ChainSubsetRandomSampler if shuffle else SequentialSampler
         DataLoader.__init__(

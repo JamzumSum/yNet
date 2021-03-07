@@ -2,6 +2,8 @@
 
 A Computer Aided Denoisis Algorithom for Classifying Breast Ultrasound Images Based on Weakly-Supervised Few Shot Learning
 
+@import "./dashboard.md"
+
 ## Public available data
 
 ### Indirectly

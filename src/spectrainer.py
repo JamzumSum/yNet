@@ -31,6 +31,7 @@ class ToyNetTrainer(FSMBase):
         self,
         Net,
         model_conf: DictConfig,
+        coeff_conf: DictConfig,
         misc: DictConfig,
         op_conf: ListConfig,
         sg_conf: DictConfig,
@@ -38,7 +39,7 @@ class ToyNetTrainer(FSMBase):
     ):
         self.branch_conf = branch_conf
         super().__init__(
-            Net, model_conf, misc, op_conf, sg_conf,
+            Net, model_conf, coeff_conf, misc, op_conf, sg_conf,
         )
 
         self.discardYbEpoch = self.misc.get("use_annotation_from", 0)
@@ -74,12 +75,22 @@ class ToyNetTrainer(FSMBase):
         weight_decay = {
             k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
         }
-        paramdic = self.net.parameter_groups(weight_decay)
+
+        # add support for non-multibranch model, usually a baseline like resnet.
+        if isinstance(self.net, MultiBranch):
+            paramdic = self.net.branch_weight(weight_decay)
+            mop_param_key = ([i, i + "_no_decay"] for i in self.net.branches)
+            mop_param_key = sum(mop_param_key, [])
+            msg_param_key = self.net.branches
+        else:
+            paramdic = {"D": self.net.parameters()}
+            mop_param_key = ["D", "D_no_decay"]
+            msg_param_key = ["D"]
+
         paramdic, param_group_key = no_decay(
             weight_decay, paramdic, op_arg, self.op_conf.get("lr", default_lr)
         )
 
-        mop_param_key = ["M", "M_no_decay", "B", "B_no_decay"]
         mop_param = [paramdic[k] for k in mop_param_key if k in paramdic]
         mop = self.op_cls(mop_param, **self.op_conf)
         ops = [mop]
@@ -90,9 +101,9 @@ class ToyNetTrainer(FSMBase):
         if not any(sg_arg.values()):
             return ops
 
-        msg_param_key = ["M", "B"]
         msg_param = [sg_arg[k] for k in param_group_key if k in msg_param_key]
         sgs = []
+        # TODO: warm-up scheduler
         if msg_param:
             msg = ReduceLROnPlateau(mop, msg_param)
             sgs.append(plateau_lr_dic(msg, "val_loss"))
@@ -106,19 +117,13 @@ class ToyNetTrainer(FSMBase):
 
     def training_step(self, batch, batch_idx: int, opid=0):
         if opid == 0:
+
             X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
             if self.current_epoch < self.discardYbEpoch:
                 Yb = None
-            res, loss, summary = self.net.lossWithResult(X, Ym, Yb, mask, self.piter,)
+            res, loss, summary = self.net.lossWithResult(self.cosg, X, Ym, Yb, mask)
 
-            self.log(
-                "train_loss",
-                loss,
-                on_step=False,
-                on_epoch=True,
-                logger=False,
-                prog_bar=True,
-            )
+            self.log("train_loss", loss, logger=False, prog_bar=True)
             self.log_dict(summary)
             self.buf = res
 
@@ -126,9 +131,10 @@ class ToyNetTrainer(FSMBase):
                 loss = (loss - self.flood).abs() + self.flood
 
         elif opid == 1:
+
             res = self.buf[0][-2:]
-            loss = self.net.discriminatorLoss(*res, Ym, Yb, piter=self.piter)
-            self.log("dis_loss", loss, on_step=False, on_epoch=True, logger=False)
+            loss = self.net.discriminatorLoss(self.cosg, *res, Ym, Yb)
+            self.log("dis_loss", loss, prog_bar=True, logger=False)
 
         return loss
 
@@ -139,8 +145,9 @@ class ToyNetTrainer(FSMBase):
 
         if self.current_epoch < self.discardYbEpoch:
             Yb = None
-        loss, _ = self.net.loss(X, Ym, Yb, mask, self.piter,)
+        loss, _ = self.net.loss(self.cosg, X, Ym, Yb, mask)
         self.log("val_loss", loss, prog_bar=True, logger=False)
+        return loss
 
     def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
@@ -159,7 +166,9 @@ class ToyNetTrainer(FSMBase):
 
         if mask is not None:
             res["dice"] = diceCoefficient(seg, mask, reduction="none")
-            res["closed-dice"] = diceCoefficient(morph_close(seg), mask, reduction='none')
+            res["closed-dice"] = diceCoefficient(
+                morph_close(seg), mask, reduction="none"
+            )
 
         if Yb is not None:
             res["yb"] = Yb
@@ -201,7 +210,11 @@ class ToyNetTrainer(FSMBase):
 
             if self.logSegmap and "dice" in res:
                 self.log("dice/%s" % caption, res["dice"].mean(), logger=True)
-                self.log("dice/MORPH_CLOSE/%s" % caption, res["closed-dice"].mean(), logger=True)
+                self.log(
+                    "dice/MORPH_CLOSE/%s" % caption,
+                    res["closed-dice"].mean(),
+                    logger=True,
+                )
 
             for k, (p, y) in items.items():
                 if y not in res:
@@ -247,7 +260,7 @@ class ToyNetTrainer(FSMBase):
             )
 
         if self.logSegmap:
-            seg = self.net(X, segment=True)[0].squeeze(1)
+            seg = self.net(X, classify=False).squeeze(1)
             self.logger.experiment.add_images(
                 "%s/segment" % caption, heatmap(X, seg), self.current_epoch,
             )

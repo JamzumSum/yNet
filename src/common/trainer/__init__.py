@@ -90,7 +90,7 @@ def getTrainComponents(FSM, Net, conf_path):
     datamodule.prepare_data()
     datamodule.setup()
 
-    net = FSM(Net, conf.model, conf.misc, conf.optimizer, conf.scheduler, conf.branch,)
+    net = FSM(Net, conf.model, conf.coefficients, conf.misc, conf.optimizer, conf.scheduler, conf.branch,)
 
     if conf.misc.get("continue", True):
         model_dir = trainer.default_root_dir

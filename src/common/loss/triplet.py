@@ -143,6 +143,5 @@ class SemiHardTripletLoss(torch.nn.Module):
 
     def forward(self, embedding, target):
         if self.normalize:
-            norm = torch.linalg.norm(embedding, dim=1, keepdim=True)  # [N]
-            embedding = embedding / norm  # [N, D]
+            embedding = F.normalize(embedding, dim=1)
         return triplet_loss(embedding, target, self.margin, self.normalize, True)

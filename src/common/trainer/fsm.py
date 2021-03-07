@@ -6,6 +6,7 @@ from datetime import date
 
 import pytorch_lightning as pl
 import torch
+from misc import CoefficientScheduler
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
@@ -14,6 +15,7 @@ class FSMBase(pl.LightningModule, ABC):
         self,
         Net,
         model_conf: DictConfig,
+        coeff_conf: DictConfig,
         misc: DictConfig,
         op_conf: OmegaConf,
         sg_conf: DictConfig,
@@ -26,6 +28,7 @@ class FSMBase(pl.LightningModule, ABC):
         self.misc = misc
         self.sg_conf = sg_conf
         self.model_conf = model_conf
+        self.cosg = CoefficientScheduler(coeff_conf, {"piter": "x", "max_epochs": "M"})
 
         if OmegaConf.is_dict(op_conf):
             self.op_cls = getattr(torch.optim, op_conf.pop("name", "SGD"))
@@ -66,6 +69,10 @@ class FSMBase(pl.LightningModule, ABC):
     ###########################################################################
     ######################## hooks defined below ##############################
     ###########################################################################
+
+    def on_train_epoch_start(self):
+        # self.cosg.update(piter=self.piter, max_epochs=self.trainer.max_epochs)
+        self.cosg.update(piter=self.piter)
 
     def on_save_checkpoint(self, checkpoint: dict):
         checkpoint["seed"] = self.seed

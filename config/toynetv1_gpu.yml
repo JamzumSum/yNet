@@ -7,14 +7,16 @@ model:
   ulevel: 3
   ylevel: 2 
 
-  # use torch checkpoint when training
-  memory_trade: False
+  # margin when calculating triplet loss
+  margin: 0.3
 
-  # coefficients when calculating multi-task loss
-  coefficients:
-    tm: 0.05
-    seg: 0.8
-    triphard: 2
+  # use torch checkpoint to save memory on training
+  memory_trade: True
+
+# coefficients when calculating multi-task loss
+coefficients:
+  task_tm: 0.05
+  task_seg: 1 - 0.2 * (x ** 0.5)
 
 datasets:
   - set2
@@ -24,7 +26,7 @@ datasets:
 # trainer flag
 flag:
   gpus: 1
-  precision: 16
+  # precision: 16
   # amp_backend: apex
   min_epochs: 40
   max_epochs: 80
@@ -60,7 +62,7 @@ dataloader:
     batch_size: 10
     shuffle: True
 
-  # for scoring, validating, testing
+  # for evaluating, validating, testing
   validating:
     batch_size: 16
 
