@@ -15,17 +15,20 @@ def unsqueeze_as(s, t, dim=-1):
         s = s.unsqueeze(dim)
     return s
 
-def deep_collate(out_ls: list, force_stack=False):
+def deep_collate(out_ls: list, force_stack=False, filterout=None):
     if not out_ls or out_ls[0] is None:
         return
 
     resdic = defaultdict(list)
+    if filterout is None: filterout = []
+
     for r in out_ls:
         if isinstance(r, dict):
             gen = r.items()
         elif isinstance(r, (list, tuple)):
             gen = enumerate(r)
         for j, t in gen:
+            if j in filterout: continue
             resdic[j].append(t)
     for k, v in resdic.items():
         f = torch.stack if force_stack or v[0].dim == 0 else torch.cat

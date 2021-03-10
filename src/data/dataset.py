@@ -159,7 +159,7 @@ class DistributedConcatSet(Distributed, ConcatDataset):
 
 
 class CachedDataset(Distributed):
-    def __init__(self, loader, content: dict, meta):
+    def __init__(self, loader, content: dict, meta, withpid=False):
         self.dics = content
         self.titles = meta["title"]
         # If meta is a dict of single item, it must be uniform for any subset of the set.
@@ -167,14 +167,18 @@ class CachedDataset(Distributed):
         self.distrib = meta.pop("distribution")
         self.meta = meta
         self.loader = loader
+        self.withpid = withpid
         Distributed.__init__(self, meta["statistic_title"])
 
     def __getitem__(self, i, fetch=True):
         item = {title: self.dics[title][i] for title in self.titles}
+        if not self.withpid:
+            item.pop('pid')
         if fetch:
             item["X"] = self.loader.load(item["X"])
             if "mask" in item:
                 item["mask"] = self.loader.load(item["mask"])
+        
         return item
 
     def __len__(self):
@@ -215,12 +219,12 @@ class CachedDatasetGroup(DistributedConcatSet):
     Dataset for a group of cached datasets.
     """
 
-    def __init__(self, path, device=None):
-        d: dict = torch.load(path)
+    def __init__(self, path, device=None, withpid=False):
+        d: dict = torch.load(os.path.join(path, 'meta.pt'))
         shapedic: dict = d.pop("data")
         index: list = d.pop("index")
         # group holder the loader entity
-        self.loader = IndexLoader(os.path.splitext(path)[0] + ".imgs", index, device)
+        self.loader = IndexLoader(os.path.join(path, 'images.pts'), index, device)
 
         datasets = []
         for shape, dic in shapedic.items():

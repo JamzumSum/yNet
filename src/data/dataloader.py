@@ -24,7 +24,7 @@ merge_list = lambda l: sum(l, [])
 class CumulativeRandomSampler(RandomSampler):
     def __init__(self, add, *args, **kwargs):
         self.a = add
-        RandomSampler.__init__(self, *args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __iter__(self):
         return (self.a + i for i in super().__iter__())
@@ -121,7 +121,7 @@ class FixLoader(DataLoader, DeviceAwareness):
         if self.drop_last:
             x = self.augmentFromBatch(x, N)
 
-        x = deep_collate(x, True)
+        x = deep_collate(x, True, ['pid'])
         x.setdefault("Yb", None)
         x.setdefault("mask", None)
         return x
