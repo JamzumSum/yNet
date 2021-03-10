@@ -2,9 +2,7 @@
 
 ### before merging back
 
-* fix lr warm-up support
-* coefficient manager
-* ~~test for discriminator path~~ 
+* ~~📌 fix lr warm-up support~~
 
 ### model
 
@@ -18,7 +16,7 @@
 ### engineering
 
 * make a tester/predicter
-* traceback an image to its path(fileid)
+* 📌 data-wise meta
 * diverse augments, both random arg aug and more kinds of augment.
 * multi-process in dataloader
 * profile the dataloader

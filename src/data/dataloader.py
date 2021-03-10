@@ -48,10 +48,8 @@ class ChainSubsetRandomSampler(Sampler[int]):
         indices = dataset.cumulative_sizes[:-1]
         indices.insert(0, 0)
         return merge_list(
-            [
-                ChainSubsetRandomSampler.getSamplers(D, s + start)
-                for s, D in zip(indices, dataset.datasets)
-            ]
+            ChainSubsetRandomSampler.getSamplers(D, s + start)
+            for s, D in zip(indices, dataset.datasets)
         )
 
     def __iter__(self):

@@ -18,7 +18,7 @@ from common.utils import BoundingBoxCrop, morph_close
 from misc import CoefficientScheduler as CSG
 
 from .discriminator import WithCD
-from .unet import ConvStack2, DownConv, UNet, norm_layer
+from .unet import ConvStack2, DownConv, UNet
 
 yes = lambda p: torch.rand(()) < p
 
@@ -27,6 +27,7 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
     """
     [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
     """
+
     norm = "groupnorm"
 
     def __init__(
@@ -64,7 +65,6 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
 
         self.ypath = nn.Sequential(*mls)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.norm_layer = norm_layer(self.norm, cc)
         self.mfc = nn.Linear(cc, 2)
         self.bfc = nn.Linear(cc, K)
         self.dropout = nn.Dropout(dropout)
@@ -157,19 +157,16 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
         #       Then the linear size can be reduced as 0.5x :D
         c = torch.cat((c, cg), dim=1)  # [N, fc * 2^(ul + 1), H, W]
 
-        if self.ylevel:
-            c = self.ypath(c)
-
+        # fmt: off
+        if self.ylevel: c = self.ypath(c)
         c = self.pool(c)[..., 0, 0]  # [N, fc * 2^(ul + yl + 1)]
 
-        # normalize after triplet embedding extracting.
-        # See: A Strong Baseline and Batch Normalization Neck for Deep Person Re-identification
-        x = self.norm_layer(c)
-        x = self.dropout(x)
+        # 0307: conflict between normalization and dropout. rollback.
+        x = self.dropout(c)
         lm = self.mfc(x)  # [N, 2]
         lb = self.bfc(x)  # [N, K]
-        if logit:
-            return seg, c, lm, lb
+        if logit: return seg, c, lm, lb
+        # fmt: on
 
         Pm = F.softmax(lm, dim=1)
         Pb = F.softmax(lb, dim=1)
@@ -232,7 +229,7 @@ class ToyNetV1(BIRADsUNet):
         return: Original result, M-branch losses, B-branch losses.
         """
         piter = cmgr.piter
-        probe_self_guide = cmgr.get('probe_self_guide', piter ** 4)
+        probe_self_guide = cmgr.get("probe_self_guide", piter ** 4)
 
         # allow mask guidance
         if yes(probe_self_guide):
@@ -247,14 +244,14 @@ class ToyNetV1(BIRADsUNet):
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary
         def lossInner(seg, embed, lm, lb):
-            loss = {"pm": F.cross_entropy(lm, Ym, weight=self.mweight,)}
+            loss = {"pm": F.cross_entropy(lm, Ym, weight=self.mweight)}
 
             if mask is not None and seg is not None:
-                weight_focus_pos = cmgr.get('weight_focus_pos', 1 - piter ** 2)
+                weight_focus_pos = cmgr.get("weight_focus_pos", 1 - piter ** 2)
                 loss["seg"] = ((seg - mask) ** 2 * (weight_focus_pos * mask + 1)).mean()
 
             if Yb is not None:
-                gamma_b = cmgr.get('gamma_b', piter + 1)
+                gamma_b = cmgr.get("gamma_b", piter + 1)
                 loss["pb"] = focal_smooth_bce(
                     lb, Yb, gamma=gamma_b, weight=self.bweight
                 )
@@ -276,8 +273,6 @@ class ToyNetV1(BIRADsUNet):
             "tm": "m/triplet",
             "seg": "segment-mse",
             "pb": "b/CE",
-            "gpm": "m-guided/CE",
-            "gtm": "m-guided/triplet",
             # 'tb': 'b/triplet'
         }
         cum_loss = 0
@@ -286,7 +281,7 @@ class ToyNetV1(BIRADsUNet):
             if k not in loss:
                 continue
             # multi-task loss fusion
-            cum_loss = cum_loss + loss[k] * cmgr.get('task_' + k, 1)
+            cum_loss = cum_loss + loss[k] * cmgr.get("task_" + k, 1)
             summary["loss/" + v] = loss[k].detach()
         return res, cum_loss, summary
 

@@ -1,5 +1,6 @@
-import torch
 from collections import defaultdict
+
+import torch
 
 
 class DirectLR(torch.optim.lr_scheduler._LRScheduler):

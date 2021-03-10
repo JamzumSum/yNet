@@ -12,7 +12,7 @@ from common.decorators import checkpoint, CheckpointSupport
 from common.support import SelfInitialed
 
 
-def norm_layer(norm: str, ic):
+def norm_layer2d(norm: str, ic):
     if norm == "batchnorm":
         return nn.BatchNorm2d(ic)
     elif norm == "groupnorm":
@@ -37,19 +37,24 @@ class ConvStack2(ChannelInference):
         super().__init__(ic, oc)
         self.res = res
         self.CBR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer(norm, oc), nn.ReLU()
+            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer2d(norm, oc), nn.ReLU()
         )
         self.CB = nn.Sequential(
-            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer(norm, oc)
+            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer2d(norm, oc)
         )
+        if res:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(ic, oc, 1, bias=False),
+                norm_layer2d(norm, oc)
+            )
 
     def forward(self, X):
-        X = self.CBR(X)
+        r = self.CBR(X)
         if self.res:
-            X = X + self.CB(X)
+            r = self.downsample(X) + self.CB(r)
         else:
-            X = self.CB(X)
-        return torch.relu(X)
+            r = self.CB(r)
+        return torch.relu(r)
 
 
 class DownConv(ChannelInference):
@@ -94,7 +99,7 @@ class UpConv(ChannelInference):
             # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
             # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
             nn.Conv2d(ic, ic // 2, 3, 1, 1, bias=False),
-            norm_layer(norm, ic // 2),
+            norm_layer2d(norm, ic // 2),
         )
 
     def forward(self, X):

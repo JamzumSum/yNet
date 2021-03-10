@@ -90,13 +90,22 @@ def getTrainComponents(FSM, Net, conf_path):
     datamodule.prepare_data()
     datamodule.setup()
 
-    net = FSM(Net, conf.model, conf.coefficients, conf.misc, conf.optimizer, conf.scheduler, conf.branch,)
+    kwargs = dict(
+        Net=Net,
+        model_conf=conf.model,
+        coeff_conf=conf.coefficients,
+        misc=conf.misc,
+        op_conf=conf.optimizer,
+        sg_conf=conf.scheduler,
+        branch_conf=conf.branch,
+    )
+    net = FSM(**kwargs)
 
     if conf.misc.get("continue", True):
         model_dir = trainer.default_root_dir
         name = conf.misc.get("load_from", "latest") + ".pt"
         path = os.path.join(model_dir, name)
-        net = net.load_from_checkpoint(path)
+        net = net.load_from_checkpoint(path, **kwargs)
     else:
         net.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
 

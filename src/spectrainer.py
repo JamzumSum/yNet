@@ -58,20 +58,27 @@ class ToyNetTrainer(FSMBase):
     def forward(self, X):
         return self.net(X)
 
-    def configure_optimizers(self):
-        branches = ["M", "B"]
-        if self.adversarial:
-            branches.append("discriminator")
+    def overrided_opsg(self, branches: list):
         op_arg, sg_arg = {}, {}
         for k in branches:
             d = self.branch_conf.get(k, {})
-            op_arg[k] = d.get("optimizer", self.op_conf)
+            op_arg[k] = shallow_update(
+                self.op_conf, d.get("optimizer", self.op_conf), True
+            )
             sg_arg[k] = shallow_update(
                 self.sg_conf, d.get("scheduler", self.sg_conf), True
             )
+        return op_arg, sg_arg
 
-        default_decay = get_arg_default(self.op_cls.__init__, "weight_decay")
-        default_lr = get_arg_default(self.op_cls.__init__, "lr")
+    def configure_optimizers(self):
+        branchstr = "MBD" if self.adversarial else "MB"
+        op_arg, sg_arg = self.overrided_opsg(branchstr)
+
+        get_op_init_default = lambda arg: get_arg_default(self.op_cls.__init__, arg)
+        default_decay, default_lr = (
+            get_op_init_default("weight_decay"),
+            get_op_init_default("lr"),
+        )
         weight_decay = {
             k: d.get("weight_decay", default_decay) for k, d in op_arg.items()
         }
@@ -83,9 +90,9 @@ class ToyNetTrainer(FSMBase):
             mop_param_key = sum(mop_param_key, [])
             msg_param_key = self.net.branches
         else:
-            paramdic = {"D": self.net.parameters()}
-            mop_param_key = ["D", "D_no_decay"]
-            msg_param_key = ["D"]
+            paramdic = {"G": self.net.parameters()}
+            mop_param_key = ["G", "G_no_decay"]
+            msg_param_key = ["G"]
 
         paramdic, param_group_key = no_decay(
             weight_decay, paramdic, op_arg, self.op_conf.get("lr", default_lr)
@@ -103,7 +110,6 @@ class ToyNetTrainer(FSMBase):
 
         msg_param = [sg_arg[k] for k in param_group_key if k in msg_param_key]
         sgs = []
-        # TODO: warm-up scheduler
         if msg_param:
             msg = ReduceLROnPlateau(mop, msg_param)
             sgs.append(plateau_lr_dic(msg, "val_loss"))
@@ -114,6 +120,18 @@ class ToyNetTrainer(FSMBase):
                 sgs.append(plateau_lr_dic(dsg, "dis_loss"))
 
         return ops, sgs
+
+    # fmt: off
+    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_idx, closure, *args, **kwargs):
+    # fmt: on
+        # warm up lr
+        if self.trainer.global_step < 500:
+            lr_scale = min(1., float(self.trainer.global_step + 1) / 500.)
+            for pg in optimizer.param_groups:
+                pg['lr'] = lr_scale * pg['initial_lr']
+
+        # update params
+        optimizer.step(closure=closure)
 
     def training_step(self, batch, batch_idx: int, opid=0):
         if opid == 0:
