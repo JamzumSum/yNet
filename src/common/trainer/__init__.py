@@ -83,6 +83,7 @@ def getTrainComponents(FSM, Net, conf_path):
     datamodule = DPLSet(
         conf.dataloader,
         conf.datasets,
+        'Ym',
         (8, 2),
         conf.misc.get("augment", None),
         "cpu" if not trainer.gpus else "cuda",

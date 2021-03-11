@@ -3,7 +3,7 @@ from unittest import TestCase
 import torch
 import torch.nn as nn
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
-from common.loss.triplet import SemiHardTripletLoss
+from common.loss.triplet import SemiHardTripletLoss, distance_weighted_sampling, cosine_dist
 
 
 def teq(t1, t2, eps=1e-5):
@@ -137,3 +137,7 @@ class TripletTest(TestCase):
         print("loss =", loss)
         print(c)
 
+    def testSampling(self):
+        D = 32
+        embed = torch.randn((10, D))
+        distance_weighted_sampling(cosine_dist(embed, embed), D, 5)

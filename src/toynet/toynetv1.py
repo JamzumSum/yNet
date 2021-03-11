@@ -12,7 +12,7 @@ import torch.nn as nn
 from common import freeze, unsqueeze_as
 from common.decorators import NoGrad
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
-from common.loss.triplet import SemiHardTripletLoss
+from common.loss.triplet import WeightedExampleTripletLoss
 from common.support import *
 from common.utils import BoundingBoxCrop, morph_close
 from misc import CoefficientScheduler as CSG
@@ -67,7 +67,7 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.mfc = nn.Linear(cc, 2)
         self.bfc = nn.Linear(cc, K)
-        self.dropout = nn.Dropout(dropout)
+        self.final_norm = nn.GroupNorm(max(1, cc // 16), cc)
         self.selfInit()
 
     @property
@@ -159,10 +159,11 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
 
         # fmt: off
         if self.ylevel: c = self.ypath(c)
-        c = self.pool(c)[..., 0, 0]  # [N, fc * 2^(ul + yl + 1)]
+        c = self.pool(c)[..., 0, 0]    # [N, fc * 2^(ul + yl + 1)]
+                                       # empirically, D = fc * 2^(ul + yl + 1) >= 128
 
-        # 0307: conflict between normalization and dropout. rollback.
-        x = self.dropout(c)
+        x = self.final_norm(c)
+        # TODO: is fc's biases neccesary?
         lm = self.mfc(x)  # [N, 2]
         lb = self.bfc(x)  # [N, K]
         if logit: return seg, c, lm, lb
@@ -221,7 +222,7 @@ class ToyNetV1(BIRADsUNet):
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
         self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
 
-        self.triplet = SemiHardTripletLoss(margin=margin) if margin > 0 else None
+        self.triplet = WeightedExampleTripletLoss(margin=margin) if margin > 0 else None
 
     def _loss(self, cmgr: CSG, X, Ym, Yb=None, mask=None):
         """

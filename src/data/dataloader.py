@@ -7,13 +7,10 @@ import torch
 import torch.multiprocessing as mp
 from common import deep_collate
 from common.support import DeviceAwareness
-from torch.utils.data import (
-    ConcatDataset,
-    DataLoader,
-    RandomSampler,
-    Sampler,
-    SequentialSampler,
-)
+from torch.utils.data import (BatchSampler, ConcatDataset, DataLoader,
+                              RandomSampler, Sampler, SequentialSampler)
+
+from data.dataset import Distributed
 
 from .augment import ElasticAugmentSet
 
@@ -61,9 +58,111 @@ class ChainSubsetRandomSampler(Sampler[int]):
         return sum(len(i) for i in self.sampler)
 
 
-class FixLoader(DataLoader, DeviceAwareness):
-    title = ("X", "Ym", "Yb", "mask")
+class DistributedSampler(BatchSampler, DeviceAwareness):
+    """
+    Ensure amounts of each class in a batch to be the same.
 
+    Hence `batch_size` denotes num_per_class in a batch. 
+    The final batchsize is `batch_size * k`.
+    Samples of the same class will be arranged continuously.
+    """
+
+    def __init__(
+        self,
+        dataset: Distributed,
+        distrib_title: str,
+        batchsize_k: int,
+        device=None,
+        shuffle=False,
+    ):
+        sampler_cls = ChainSubsetRandomSampler if shuffle else SequentialSampler
+        self.batchsize_k = batchsize_k
+        self.shuffle = shuffle
+        self.dataset = dataset
+        self.distrib_title = distrib_title
+        self.k = self.dataset.K(distrib_title)
+        DeviceAwareness.__init__(self, device)
+        BatchSampler.__init__(self, sampler_cls(dataset), batchsize_k * self.k, True)
+
+        bfdic = defaultdict(lambda: defaultdict(int))
+
+        def loopmeta(x):
+            nonlocal bfdic
+            bfdic[x['meta'].batchflag][x[distrib_title].item()] += 1
+
+        with dataset.no_fetch():
+            dataset.argwhere(loopmeta)
+        self._l = sum(min(d.values()) // batchsize_k for d in bfdic.values())
+
+    def makebatch(self, hashdic: dict):
+        batch = []
+        for stack in hashdic:
+            for _ in range(self.batchsize_k):
+                batch.append(stack.pop())
+        return batch
+
+    def __iter__(self):
+        kstack = lambda: [[] for _ in range(self.k)]
+        tdic = defaultdict(kstack)
+        for i in self.sampler:
+            with self.dataset.no_fetch():
+                x = self.dataset[i]
+            hd = tdic[x["meta"].batchflag]
+            hd[x[self.distrib_title]].append(i)
+            if all(len(stack) > self.batchsize_k for stack in hd):
+                yield self.makebatch(hd)
+
+    def __len__(self):
+        return self._l
+
+
+def fixCollate(x):
+    """
+    1. make sure only one shape and annotation type in the batch.
+    2. add a meta of the batch.
+    """
+    hashstat = defaultdict(list)
+    for i in x:
+        hashstat[i.pop("meta").batchflag].append(i)
+    bf, x = max(hashstat.items(), key=lambda t: len(t[1]))
+
+    x = deep_collate(x, True, ["meta"])
+    x.setdefault("Yb", None)
+    x.setdefault("mask", None)
+    x["meta"] = {"batchflag": bf}
+    return x
+
+
+class FixBatchLoader(DataLoader, DeviceAwareness):
+    def __init__(
+        self,
+        dataset: ConcatDataset,
+        distrib_title: str,
+        batchsize_k=1,
+        shuffle=False,
+        device=None,
+        spawn=False,
+        **otherconf
+    ):
+        if spawn:
+            raise NotImplementedError
+        assert "drop_last" not in otherconf
+
+        DeviceAwareness.__init__(self, device)
+        DataLoader.__init__(
+            self,
+            dataset,
+            **otherconf,
+            pin_memory=False,
+            collate_fn=fixCollate,
+            num_workers=mp.cpu_count() if spawn else 0,
+            batch_sampler=DistributedSampler(
+                dataset, distrib_title, batchsize_k, device, shuffle
+            ),
+        )
+
+
+class FixLoader(DataLoader, DeviceAwareness):
     def __init__(
         self,
         dataset: ConcatDataset,
@@ -74,7 +173,8 @@ class FixLoader(DataLoader, DeviceAwareness):
         spawn=False,
         **otherconf
     ):
-        if spawn: raise NotImplementedError
+        if spawn:
+            raise NotImplementedError
         DeviceAwareness.__init__(self, device)
         sampler_cls = ChainSubsetRandomSampler if shuffle else SequentialSampler
         DataLoader.__init__(
@@ -84,44 +184,7 @@ class FixLoader(DataLoader, DeviceAwareness):
             **otherconf,
             pin_memory=False,
             drop_last=drop_last,
-            collate_fn=self.fixCollate,
-            # TODO: maybe batch_sampler in the future
+            collate_fn=fixCollate,
             sampler=sampler_cls(dataset),
             num_workers=mp.cpu_count() if spawn else 0,
         )
-        if drop_last:
-            self.filter, self.padding = ElasticAugmentSet.getFilter(4)
-            self.fiter = self.filter.to(self.device)
-
-    def augmentFromBatch(self, x, N):
-        aN = N - len(x)
-        if aN <= 0:
-            return x
-
-        ax = [
-            ElasticAugmentSet.deformItem(i, self.filter, self.padding)
-            for i in choices(x, k=aN)
-        ]
-        return x + ax
-
-    def fixCollate(self, x):
-        """
-        1. fix num of return vals
-        2. make sure only one shape and annotation type in the batch.
-        3. augment the batch if drop_last. For caller may expect length of any batch is fixed.
-        """
-        N = len(x)
-        hashf = lambda i: (i["X"].shape, "Yb" in i, "mask" in i,)
-
-        hashstat = defaultdict(list)
-        for i in x:
-            hashstat[hashf(i)].append(i)
-        x = max(hashstat.values(), key=len)
-
-        if self.drop_last:
-            x = self.augmentFromBatch(x, N)
-
-        x = deep_collate(x, True, ['pid'])
-        x.setdefault("Yb", None)
-        x.setdefault("mask", None)
-        return x

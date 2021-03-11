@@ -8,32 +8,29 @@ Since my implement is not working... this is another implement from reid task.
 import torch
 import torch.nn.functional as F
 
-
 @torch.jit.script
-def euclidean_dist(x, y):
+def euclidean_dist(x, y, eps: float=1e-12):
     m, n = x.size(0), y.size(0)
     xx = torch.pow(x, 2).sum(1, keepdim=True).expand(m, n)
     yy = torch.pow(y, 2).sum(1, keepdim=True).expand(n, m).t()
     dist = xx + yy - 2 * torch.matmul(x, y.t())
-    dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+    dist = dist.clamp(min=eps).sqrt()  # for numerical stability
     return dist
 
 
 @torch.jit.script
-def cosine_dist(x, y):
-    x = F.normalize(x, dim=1)
-    y = F.normalize(y, dim=1)
+def cosine_dist(x, y, eps: float=1e-12):
+    x = F.normalize(x, dim=1, eps=eps)
+    y = F.normalize(y, dim=1, eps=eps)
     dist = 2 - 2 * torch.mm(x, y.t())
     return dist
 
 
-def softmax_weights(dist, mask):
+def softmax_weights(dist, mask, eps=1e-12):
     max_v = torch.max(dist * mask, dim=1, keepdim=True)[0]
     diff = dist - max_v
-    Z = (
-        torch.sum(torch.exp(diff) * mask, dim=1, keepdim=True) + 1e-6
-    )  # avoid division by zero
-    W = torch.exp(diff) * mask / Z
+    Z = torch.sum(torch.exp(diff) * mask, dim=1, keepdim=True)
+    W = torch.exp(diff) * mask / Z.clamp(min=eps)  # avoid division by zero
     return W
 
 
@@ -61,12 +58,13 @@ def hard_example_mining(dist_mat, is_pos, is_neg):
     dist_ap, _ = torch.max(dist_mat * is_pos, dim=1)
     # `dist_an` means distance(anchor, negative)
     # both `dist_an` and `relative_n_inds` with shape [N]
-    dist_an, _ = torch.min(dist_mat * is_neg + is_pos * 99999999.0, dim=1)
+    inf = dist_mat.max() + 1
+    dist_an, _ = torch.min(dist_mat * is_neg + is_pos * inf, dim=1)
 
     return dist_ap, dist_an
 
 
-def weighted_example_mining(dist_mat, is_pos, is_neg):
+def weighted_example_mining(dist_mat, is_pos, is_neg, eps=1e-12):
     """For each anchor, find the weighted positive and negative sample.
     Args:
       dist_mat: pytorch Variable, pair wise distance between samples, shape [N, N]
@@ -83,8 +81,8 @@ def weighted_example_mining(dist_mat, is_pos, is_neg):
     dist_ap = dist_mat * is_pos
     dist_an = dist_mat * is_neg
 
-    weights_ap = softmax_weights(dist_ap, is_pos)
-    weights_an = softmax_weights(-dist_an, is_neg)
+    weights_ap = softmax_weights(dist_ap, is_pos, eps)
+    weights_an = softmax_weights(-dist_an, is_neg, eps)
 
     dist_ap = torch.sum(dist_ap * weights_ap, dim=1)
     dist_an = torch.sum(dist_an * weights_an, dim=1)
@@ -92,7 +90,52 @@ def weighted_example_mining(dist_mat, is_pos, is_neg):
     return dist_ap, dist_an
 
 
-def triplet_loss(embedding, targets, margin, norm_feat, hard_mining):
+def distance_weighted_sampling(
+    dist_mat, embed_dim, batch_k, cutoff=0.5, nonzero_loss_cutoff=1.4, eps=1e-8,
+):
+    assert len(dist_mat.size()) == 2
+
+    N = dist_mat.size(0)
+    dist_mat = dist_mat.clamp(min=cutoff)
+    log_weights = (
+        (2 - embed_dim) * dist_mat.log()
+        + ((3 - embed_dim) / 2) * (1 - (dist_mat ** 2) / 4).clamp(min=eps).log()
+    )  # -log q(d)
+
+    mask = torch.ones_like(log_weights)
+    for i in range(0, N, batch_k):
+        mask[i : i + batch_k, i : i + batch_k] = 0
+
+    mask_uniform_probs = mask.float() / (N - batch_k)
+
+    weights = torch.exp(log_weights - torch.max(log_weights))  # ? maybe shift to <= 1
+    weights = weights * mask * (dist_mat < nonzero_loss_cutoff) # clip to avoid noisy samples
+    weights_sum = torch.sum(weights, dim=1, keepdim=True)  # [N, 1]
+    weights = weights / weights_sum.clamp(min=eps)
+
+    a_indices = []
+    p_indices = []
+    n_indices = []
+
+    for i in range(N):
+        block_idx = i // batch_k
+        n_indices.append(
+            torch.distributions.Categorical(
+                weights[i] if weights_sum[i] != 0 else mask_uniform_probs[i]
+            ).sample((batch_k - 1,))
+        )
+
+        for j in range(block_idx * batch_k, (block_idx + 1) * batch_k):
+            if j != i:
+                a_indices.append(i)
+                p_indices.append(j)
+
+    n_indices = torch.cat(n_indices)
+
+    return a_indices, dist_mat[a_indices], dist_mat[p_indices], dist_mat[n_indices]
+
+
+def triplet_loss(embedding, targets, margin: float, norm_feat: bool, mining: str):
     r"""Modified from Tong Xiao's open-reid (https://github.com/Cysu/open-reid).
     Related Triplet Loss theory can be found in paper 'In Defense of the Triplet
     Loss for Person Re-Identification'."""
@@ -118,10 +161,12 @@ def triplet_loss(embedding, targets, margin, norm_feat, hard_mining):
         targets.view(N, 1).expand(N, N).ne(targets.view(N, 1).expand(N, N).t()).float()
     )
 
-    if hard_mining:
+    if mining == 'hardmining':
         dist_ap, dist_an = hard_example_mining(dist_mat, is_pos, is_neg)
-    else:
+    elif mining == 'weightedexample':
         dist_ap, dist_an = weighted_example_mining(dist_mat, is_pos, is_neg)
+    else:
+        raise ValueError(mining)
 
     y = dist_an.new().resize_as_(dist_an).fill_(1)
 
@@ -135,7 +180,8 @@ def triplet_loss(embedding, targets, margin, norm_feat, hard_mining):
 
     return loss
 
-class SemiHardTripletLoss(torch.nn.Module):
+
+class WeightedExampleTripletLoss(torch.nn.Module):
     def __init__(self, margin: float, normalize=True):
         super().__init__()
         self.margin = margin
@@ -144,4 +190,4 @@ class SemiHardTripletLoss(torch.nn.Module):
     def forward(self, embedding, target):
         if self.normalize:
             embedding = F.normalize(embedding, dim=1)
-        return triplet_loss(embedding, target, self.margin, self.normalize, True)
+        return triplet_loss(embedding, target, self.margin, self.normalize, 'weightedexample')

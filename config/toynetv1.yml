@@ -1,21 +1,15 @@
 import: ./toynetv1_gpu.yml
 model:
   width: 2
+  memory_trade: True
 
 flag: 
   gpus: 0
   limit_train_batches: 1
   limit_val_batches: 1
   limit_test_batches: 1
-  precision: 32
-
-misc:
-  continue: False
 
 dataloader:
-  training:
-    batch_size: 2
-    shuffle: True
   scoring:
     batch_size: 2
 

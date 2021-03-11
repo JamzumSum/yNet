@@ -12,13 +12,9 @@ from common.decorators import checkpoint, CheckpointSupport
 from common.support import SelfInitialed
 
 
-def norm_layer2d(norm: str, ic):
-    if norm == "batchnorm":
-        return nn.BatchNorm2d(ic)
-    elif norm == "groupnorm":
-        return nn.GroupNorm(max(1, ic // 16), ic)
-    else:
-        raise ValueError(norm)
+class ChannelNorm(nn.GroupNorm):
+    def __init__(self, ic, channels=16, *args, **kwargs):
+        super().__init__(max(1, ic // channels), ic, *args, **kwargs)
 
 
 class ChannelInference(nn.Module):
@@ -36,16 +32,16 @@ class ConvStack2(ChannelInference):
     def __init__(self, ic, oc, res=False, norm="batchnorm"):
         super().__init__(ic, oc)
         self.res = res
+        norm_layer = {'groupnorm': ChannelNorm, 'batchnorm': nn.BatchNorm2d}[norm]
         self.CBR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer2d(norm, oc), nn.ReLU()
+            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer(oc), nn.ReLU()
         )
         self.CB = nn.Sequential(
-            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer2d(norm, oc)
+            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer(oc)
         )
         if res:
             self.downsample = nn.Sequential(
-                nn.Conv2d(ic, oc, 1, bias=False),
-                norm_layer2d(norm, oc)
+                nn.Conv2d(ic, oc, 1, bias=False), norm_layer(oc)
             )
 
     def forward(self, X):
@@ -99,7 +95,7 @@ class UpConv(ChannelInference):
             # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
             # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
             nn.Conv2d(ic, ic // 2, 3, 1, 1, bias=False),
-            norm_layer2d(norm, ic // 2),
+            {'groupnorm': ChannelNorm, 'batchnorm': nn.BatchNorm2d}[norm](ic // 2),
         )
 
     def forward(self, X):
@@ -121,7 +117,7 @@ class UNetWOHeader(ChannelInference):
         self.level = level
         self.cps = CheckpointSupport(memory_trade)
         self.fc = fc
-        self.add_module('L1', ConvStack2(ic, fc, res=inner_res))
+        self.add_module("L1", ConvStack2(ic, fc, res=inner_res))
         cc = self._L(1).oc
 
         for i in range(level):

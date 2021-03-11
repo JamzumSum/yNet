@@ -4,6 +4,7 @@ Dataset for BIRADs images & annotations. Supports multi-scale images.
 * author: JamzumSum
 * create: 2021-1-13
 """
+import bisect
 import os
 from abc import ABC, abstractclassmethod
 from collections import defaultdict
@@ -11,7 +12,7 @@ from itertools import product
 
 import torch
 from misc.indexserial import IndexLoader
-from torch import default_generator  # type: ignore
+from torch import default_generator as ggen  # type: ignore
 from torch.utils.data import ConcatDataset, Dataset, Subset, random_split
 
 first = lambda it: next(iter(it))
@@ -22,6 +23,7 @@ class Distributed(Dataset, ABC):
     def __init__(self, statTitle: list):
         Dataset.__init__(self)
         self.statTitle = statTitle
+        self._fetch = True
 
     def getDistribution(self, title: str):
         if title not in self.statTitle:
@@ -41,10 +43,10 @@ class Distributed(Dataset, ABC):
         else:
             ge = lambda i: i[title]
 
-        if indices:
-            gen = ((i, self[i],) for i in indices)
-        else:
-            gen = enumerate(self)
+        if indices is None:
+            indices = range(len(self))
+        gen = ((i, self[i]) for i in indices)
+
         return [i for i, d in gen if cond(ge(d))]
 
     @property
@@ -56,10 +58,23 @@ class Distributed(Dataset, ABC):
         K2 = len(self.getDistribution(title2))
         m = torch.empty((K1, K2), dtype=torch.long)
         for i in range(K1):
-            arg1 = self.argwhere(lambda d: d == i, title1)
-            for j in range(K2):
-                m[i, j] = len(self.argwhere(lambda d: d == j, title2, arg1))
+            with self.no_fetch():
+                arg1 = self.argwhere(lambda d: d == i, title1)
+                for j in range(K2):
+                    m[i, j] = len(self.argwhere(lambda d: d == j, title2, arg1))
         return m
+
+    def no_fetch(self):
+        p = self
+
+        class NoFetchContext:
+            def __enter__(self):
+                p._fetch = False
+
+            def __exit__(self, *args, **kwargs):
+                p._fetch = True
+
+        return NoFetchContext()
 
 
 class DistributedSubset(Distributed, Subset):
@@ -82,14 +97,27 @@ class DistributedSubset(Distributed, Subset):
         K2 = len(self.getDistribution(title2))
         m = torch.empty((K1, K2), dtype=torch.long)
         for i in range(K1):
-            arg1 = self.dataset.argwhere(lambda d: d == i, title1, indices=self.indices)
-            for j in range(K2):
-                m[i, j] = len(self.dataset.argwhere(lambda d: d == j, title2, arg1))
+            with self.no_fetch():
+                arg1 = self.dataset.argwhere(
+                    lambda d: d == i, title1, indices=self.indices
+                )
+                for j in range(K2):
+                    m[i, j] = len(self.dataset.argwhere(lambda d: d == j, title2, arg1))
         return m
 
     @property
     def meta(self):
         return self.dataset.meta
+
+    def no_fetch(self):
+        p = self
+        class NoFetchContext:
+            def __enter__(self):
+                self.ct = p.dataset.no_fetch()
+                self.ct.__enter__()
+            def __exit__(self, *args, **kwargs):
+                self.ct.__exit__(*args, **kwargs)
+        return NoFetchContext()
 
 
 class DistributedConcatSet(Distributed, ConcatDataset):
@@ -124,7 +152,8 @@ class DistributedConcatSet(Distributed, ConcatDataset):
 
     def argwhere(self, cond, title=None, indices=None):
         if indices is None:
-            return Distributed.argwhere(self, cond, title, indices)
+            with self.no_fetch():
+                return Distributed.argwhere(self, cond, title, indices)
 
         res = []
         cm = [0] + self.cumulative_sizes[:-1]
@@ -157,92 +186,28 @@ class DistributedConcatSet(Distributed, ConcatDataset):
                 return m
             return {tag: D.meta for tag, D in self.taged_datasets}
 
+    def no_fetch(self):
+        p = self
 
-class CachedDataset(Distributed):
-    def __init__(self, loader, content: dict, meta, withpid=False):
-        self.dics = content
-        self.titles = meta["title"]
-        # If meta is a dict of single item, it must be uniform for any subset of the set.
-        # Otherwise meta should have multiple items. So `distribution` must be popped up here.
-        self.distrib = meta.pop("distribution")
-        self.meta = meta
-        self.loader = loader
-        self.withpid = withpid
-        Distributed.__init__(self, meta["statistic_title"])
+        class NoFetchContext:
+            def __init__(self):
+                self.ct = []
 
-    def __getitem__(self, i, fetch=True):
-        item = {title: self.dics[title][i] for title in self.titles}
-        if not self.withpid:
-            item.pop('pid')
-        if fetch:
-            item["X"] = self.loader.load(item["X"])
-            if "mask" in item:
-                item["mask"] = self.loader.load(item["mask"])
-        
-        return item
+            def __enter__(self):
+                for i in p.datasets:
+                    ct = i.no_fetch()
+                    ct.__enter__()
+                    self.ct.append(ct)
 
-    def __len__(self):
-        return len(first(self.dics.values()))
+            def __exit__(self, *args, **kwargs):
+                for i in self.ct:
+                    i.__exit__(*args, **kwargs)
 
-    def argwhere(self, cond, title=None, indices=None, fetch=None):
-        if fetch is None:
-            fetch = title in [None, "X"]
-        if title is None:
-            ge = lambda i: self.__getitem__(i, fetch)
-        else:
-            ge = lambda i: self.__getitem__(i, fetch)[title]
-
-        gen = range(len(self)) if indices is None else indices
-        return [i for i in gen if cond(ge(i))]
-
-    def getDistribution(self, title):
-        return self.distrib[title]
-
-    def joint(self, title1, title2):
-        if title1 not in self.statTitle:
-            return
-        if title2 not in self.statTitle:
-            return
-        z = torch.zeros((self.K(title1), self.K(title2)), dtype=torch.long)
-
-        for i in range(len(self)):
-            d = self.__getitem__(i, fetch=False)
-            z[d[title1], d[title2]] += 1
-        return z
-
-    def K(self, title):
-        return len(self.meta["classname"][title])
-
-
-class CachedDatasetGroup(DistributedConcatSet):
-    """
-    Dataset for a group of cached datasets.
-    """
-
-    def __init__(self, path, device=None, withpid=False):
-        d: dict = torch.load(os.path.join(path, 'meta.pt'))
-        shapedic: dict = d.pop("data")
-        index: list = d.pop("index")
-        # group holder the loader entity
-        self.loader = IndexLoader(os.path.join(path, 'images.pts'), index, device)
-
-        datasets = []
-        for shape, dic in shapedic.items():
-            d = d.copy()
-            d["shape"] = shape
-            # and specific dataset hold a pointer of loader
-            datasets.append(CachedDataset(self.loader, dic, d))
-
-        DistributedConcatSet.__init__(self, datasets, tag=shapedic.keys())
+        return NoFetchContext()
 
 
 def classSpecSplit(
-    dataset: Distributed,
-    t,
-    v,
-    distrib_title="Ym",
-    generator=default_generator,
-    tag=None,
+    dataset: Distributed, t, v, distrib_title, generator=ggen, tag=None,
 ):
     """
     Split tensors in the condition that:
@@ -294,7 +259,8 @@ def classSpecSplit(
             val = None
         else:
             vnum = max(1, round(vr * num))
-            indices = dataset.argwhere(lambda d: d == clsidx, distrib_title)
+            with dataset.no_fetch():
+                indices = dataset.argwhere(lambda d: d == clsidx, distrib_title)
             extract = DistributedSubset(dataset, indices)
             # NOTE: fix for continue training
             seed = int(

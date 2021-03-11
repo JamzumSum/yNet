@@ -1,4 +1,5 @@
-from abc import ABC, abstractclassmethod
+import bisect
+from abc import ABC, abstractclassmethod, abstractproperty
 from random import choice
 
 import torch
@@ -47,7 +48,7 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
                 "These classes wont be sampled when augumenting."
                 % (aim_size, self.K(distrib_title), avg)
             )
-            my_distrib[my_distrib < 0] = 0
+            my_distrib.clamp_(min=0)
 
         self._distrib = {distrib_title: my_distrib}
         for i in dataset.statTitle:
@@ -57,14 +58,28 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
             j = j / j.sum(dim=1, keepdim=True)
             self._distrib[i] = (my_distrib.unsqueeze(1) * j).sum(dim=0).round_()
 
-        self._cat = torch.distributions.Categorical(my_distrib / len(self))
         self._indices = [
             dataset.argwhere(lambda d: d == i, distrib_title) for i in range(self.K(distrib_title))
         ]
+        self.cum_distrib = self.cumsum(my_distrib)
+
+    @staticmethod
+    def cumsum(sequence):
+        r, s = [], 0
+        for l in sequence:
+            r.append(l + s)
+            s += l
+        return r
 
     def __getitem__(self, i):
-        indices = self._indices[self._cat.sample().item()]
-        return self.deformation(self.dataset.__getitem__(choice(indices)))
+        k = bisect.bisect_right(self.cum_distrib, i)
+        indices = self._indices[k]
+        if self._fetch:
+            x = self.deformation(self.dataset[choice(indices)])
+        else:
+            x = self.dataset[choice(indices)]
+        x['meta'].aug = self.pid_suffix
+        return x
 
     def __len__(self):
         return self._distrib[self.distrib_title].sum().item()
@@ -80,8 +95,12 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
         pass
 
     @property
-    def meta(self):
+    def meta(self)-> dict:
         return self.dataset.meta
+
+    @abstractproperty
+    def pid_suffix(self)-> str:
+        return 'aug'
 
 
 @torch.jit.script
@@ -157,6 +176,10 @@ class ElasticAugmentSet(AugmentSet):
 
     def deformation(self, item):
         return self.deformItem(item, self.filter, self.padding, self.alpha)
+
+    @property
+    def pid_suffix(self):
+        return 'els'
 
     @staticmethod
     def getFilter(sigma):
