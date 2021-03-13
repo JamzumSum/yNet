@@ -6,13 +6,13 @@ model:
   # for (512, 512) image, unet level + ypath level <= 8
   # 3, 4, 6, 3 is the layer # of res34
   ulevel: 3
-  ylevels: [4, 6, 3]
+  ylevels: [3, 3, 3]
 
   # margin when calculating triplet loss
   margin: 0.3
 
   # use torch checkpoint to save memory on training
-  memory_trade: False
+  memory_trade: True
 
 # coefficients when calculating multi-task loss
 coefficients:
@@ -26,7 +26,7 @@ datasets:
 
 # trainer flag
 flag:
-  gpus: 1
+  gpus: [3]
   min_epochs: 40
   max_epochs: 80
   num_sanity_val_steps: 0

@@ -66,3 +66,19 @@ class PyramidPooling(nn.Module):
         ls = torch.stack(ls, dim=-1)  # [N, K, H//P0, W//P0, L]
         return self.atn(ls)
 
+
+class MLP(nn.Sequential):
+    def __init__(self, ic, oc, hidden_layers, final_bn=True, final_relu=False):
+        layers = []
+        cc = ic
+        for i in hidden_layers:
+            layers.append(nn.Linear(cc, i))
+            layers.append(nn.BatchNorm1d(i))
+            layers.append(nn.ReLU)
+            cc = i
+        layers.append(nn.Linear(cc, oc))
+        if final_bn:
+            layers.append(nn.BatchNorm1d(cc))
+        if final_relu:
+            layers.append(nn.ReLU)
+        super().__init__(*layers)
