@@ -10,7 +10,7 @@ from datetime import date
 import pytorch_lightning as pl
 import torch
 from data.plsupport import DPLSet
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
@@ -67,6 +67,17 @@ def getConfig(path) -> DictConfig:
         return d
 
 
+def gpus2device(gpus):
+    if gpus == 0:
+        return torch.device('cpu')
+    elif isinstance(gpus, int):
+        return torch.device(f'cuda:{gpus - 1}')
+    elif isinstance(gpus, (list, ListConfig)):
+        return torch.device(f'cuda:{gpus[-1]}')
+    else:
+        raise TypeError(gpus)
+
+
 def getTrainComponents(FSM, Net, conf_path):
     """
     Given the config in all, construct 3 key components for training, 
@@ -79,6 +90,7 @@ def getTrainComponents(FSM, Net, conf_path):
     """
     conf = getConfig(conf_path)
     trainer = Trainer(conf.misc, conf.paths, conf.flag)
+    device = gpus2device(trainer.gpus)
 
     datamodule = DPLSet(
         conf.dataloader,
@@ -86,7 +98,7 @@ def getTrainComponents(FSM, Net, conf_path):
         'Ym',
         (8, 2),
         conf.misc.get("augment", None),
-        "cpu" if not trainer.gpus else "cuda",
+        device,
     )
     datamodule.prepare_data()
     datamodule.setup()

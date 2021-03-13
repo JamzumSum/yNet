@@ -9,65 +9,71 @@ from itertools import chain
 
 import torch
 import torch.nn as nn
-from common import freeze, unsqueeze_as
+from common import freeze, unsqueeze_as, spatial_softmax
 from common.decorators import NoGrad
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import WeightedExampleTripletLoss
 from common.support import *
-from common.utils import BoundingBoxCrop, morph_close
+from common.utils import BoundingBoxCrop
 from misc import CoefficientScheduler as CSG
 
 from .discriminator import WithCD
-from .unet import ConvStack2, DownConv, UNet
+from .unet import ConvStack2, DownConv, UNet, ChannelNorm
 
 yes = lambda p: torch.rand(()) < p
 
 
-class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
+class YNet(nn.Module, SegmentSupported, SelfInitialed):
     """
-    [N, ic, H, W] -> [N, 2, H, W], [N, K, H, W]
+    YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], D = 2^(ul+yl+1)
     """
-
-    norm = "groupnorm"
 
     def __init__(
         self,
         in_channel,
-        K,
         width=64,
         ulevel=4,
-        ylevel=1,
-        dropout=0.2,
+        ylevels: list = None,
         memory_trade=False,
+        residual=True,
         zero_init_residual=True,
+        norm="batchnorm",
+        pad_mode="zero",
     ):
         nn.Module.__init__(self)
+
+        self.memory_trade = memory_trade
+        self.pad_mode = pad_mode
+        self.norm = norm
+        self.residual = residual
+        if ylevels is None:
+            self.ylevel = 0
+            ylevels = []
+        else:
+            self.ylevel = len(ylevels)
+
         self.unet = UNet(
             ic=in_channel,
             oc=1,
             fc=width,
             level=ulevel,
-            inner_res=True,
+            residual=residual,
             memory_trade=memory_trade,
-            norm="groupnorm",
+            norm=norm,
         )
-        self.memory_trade = memory_trade
-        self.ylevel = ylevel
-
         cc = self.unet.oc * 2  # 2x channel for 2 placeholders
-        mls = []
-        for i in range(ylevel << 1):
-            if i & 1:
-                mls.append(ConvStack2(cc, oc=cc * 2, res=True, norm=self.norm))
-            else:
-                mls.append(DownConv(cc))
-            cc = mls[-1].oc
-
-        self.ypath = nn.Sequential(*mls)
+        ylayers = []
+        for ylevel in ylevels:
+            for i in range(ylevel):
+                if i % ylevel:
+                    ylayers.append(ConvStack2(cc, cc, self.residual, self.norm))
+                else:
+                    ylayers.append(ConvStack2(cc, 2 * cc, self.residual, self.norm))
+                    ylayers.append(DownConv(2 * cc))
+                cc = ylayers[-1].oc
+        self.yoc = cc
+        self.ypath = nn.Sequential(*ylayers)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.mfc = nn.Linear(cc, 2)
-        self.bfc = nn.Linear(cc, K)
-        self.final_norm = nn.GroupNorm(max(1, cc // 16), cc)
         self.selfInit()
 
     @property
@@ -90,9 +96,24 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
                 if isinstance(m, ConvStack2):
                     nn.init.constant_(m.CB[1].weight, 0)
 
-    def forward(
-        self, X, mask=None, segment=True, classify=True, logit=False, pad_mode="zero"
-    ):
+    @NoGrad
+    def pad_placeholder(self, X, seg, c, mask, pad_mode=None):
+        # NOTE: whether the entire block requires no grad is under consideration.
+        # under current condition it will be just a classification basis for fc.
+        pad_mode = pad_mode or self.pad_mode
+        if pad_mode == "segment":
+            # 0312: Any tests failed again
+            # fmt: off
+            if mask is None: mask = seg
+            # softmax ensures the min of attentioned image >= 1/H*W*e
+            return c + self.unet(X * spatial_softmax(mask), False)
+            # fmt: on
+        elif pad_mode == "zero":
+            return torch.zeros_like(c)
+        else:
+            raise ValueError(pad_mode)
+
+    def forward(self, X, mask=None, segment=True, classify=True, pad_mode=None):
         """
         args: 
             X: [N, ic, H, W]
@@ -105,7 +126,6 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
                 `segment`: If map not given, force segment current X. Then use the segment map to generate feature.
                 `zero`: Set the second placeholder as 0. A little like dropout.
                 `copy`: Set the second placeholder same as the first. Risk of overfitting.
-                `roi`: Crop images according to segment and pass them to unet to get another placeholder. 
         return: 
             segment map  [N, 2, H, W]. return this alone if `segment but not classify`
             x: bottom of unet feature. [N, fc * 2^ul]
@@ -120,58 +140,33 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
         if not classify:
             return seg
 
-        # TODO: move these to class method
-        def from_segment(X, seg, c, mask):  # All test failed. probability collapsed.
-            with torch.no_grad():
-                if mask is None:
-                    mask = morph_close(seg)
-                X = X * mask.clamp(0.3, 1)
-            return self.unet(X, False)
-
-        def roi_extract(X, seg, c, mask):
-            raise NotImplementedError
-            with torch.no_grad():
-                if mask is None:
-                    mask = morph_close(seg)
-                Xl = BoundingBoxCrop(0.5, 2 ** self.max_depth)(mask, X)  # N * [C, h, w]
-            # TODO BUG: enter inference mode when using BN
-            # or use GroupNorm if possible...
-            return torch.cat([self.unet(xi.unsqueeze(0), False) for xi in Xl])
-
-        def zero_padding(X, seg, c, mask):
-            # 0304: Test passed. Prove that placeholders are working.
-            return torch.zeros_like(c)
-
-        def copy_it(X, seg, c, mask):
-            return c.copy()
-
-        cg = {
-            "segment": from_segment,
-            "zero": zero_padding,
-            "copy": copy_it,
-            "roi": roi_extract,
-        }[pad_mode](X, seg, c, mask)
+        cg = self.pad_placeholder(X, seg, c, mask, pad_mode)
 
         # NOTE: Two placeholders c & cg
         # TODO: what about a weight balancing the two placeholders?
         #       Then the linear size can be reduced as 0.5x :D
         c = torch.cat((c, cg), dim=1)  # [N, fc * 2^(ul + 1), H, W]
 
+        if self.ylevel:
+            c = self.ypath(c)
+        ft = self.pool(c)[..., 0, 0]  # [N, fc * 2^(ul + yl + 1)]
+        # empirically, D = fc * 2^(ul + yl + 1) >= 128
+        return seg, ft
+
+
+class BIRADsUNet(YNet, MultiBranch):
+    def __init__(self, in_channel, K, *args, norm="batchnorm", **kwargs):
+        YNet.__init__(self, in_channel, *args, **kwargs)
+        cc = self.yoc
+        self.mfc = nn.Linear(cc, 2)
+        self.bfc = nn.Linear(cc, K)
+        self.sigma = nn.Softmax(dim=1)
         # fmt: off
-        if self.ylevel: c = self.ypath(c)
-        c = self.pool(c)[..., 0, 0]    # [N, fc * 2^(ul + yl + 1)]
-                                       # empirically, D = fc * 2^(ul + yl + 1) >= 128
-
-        x = self.final_norm(c)
-        # TODO: is fc's biases neccesary?
-        lm = self.mfc(x)  # [N, 2]
-        lb = self.bfc(x)  # [N, K]
-        if logit: return seg, c, lm, lb
+        self.norm_layer = {
+            "batchnorm": nn.BatchNorm1d, 
+            "groupnorm": ChannelNorm
+        }[norm](cc)
         # fmt: on
-
-        Pm = F.softmax(lm, dim=1)
-        Pb = F.softmax(lb, dim=1)
-        return seg, c, Pm, Pb
 
     def branch_weight(self, weight_decay: dict):
         """
@@ -212,17 +207,40 @@ class BIRADsUNet(nn.Module, SegmentSupported, SelfInitialed, MultiBranch):
     def branches(self):
         return ("M", "B")
 
+    def forward(
+        self, X, mask=None, segment=True, classify=True, logit=False, pad_mode=None
+    ):
+        # BNNeck below.
+        # See: A Strong Baseline and Batch Normalization Neck for Deep Person Re-identification
+        # Use ft to calculate triplet, etc.; use fi to classify.
+        seg, ft = YNet.forward(self, X, mask, segment, classify, pad_mode)
+        fi = self.norm_layer(ft)
+
+        lm = self.mfc(fi)  # [N, 2]
+        lb = self.bfc(fi)  # [N, K]
+        if logit:
+            return seg, ft, lm, lb
+
+        Pm = self.sigma(lm)
+        Pb = self.sigma(lb)
+        return seg, ft, Pm, Pb
+
 
 class ToyNetV1(BIRADsUNet):
     __version__ = (1, 0)
 
     def __init__(self, in_channel, *args, margin=0.3, **kwargs):
-        super().__init__(in_channel, *args, **kwargs)
+        super().__init__(in_channel, *args, **kwargs, pad_mode="segment")
         # TODO: weights should be set by config...
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
         self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
 
-        self.triplet = WeightedExampleTripletLoss(margin=margin) if margin > 0 else None
+        # triplet-ify using cosine distance by default(normalize=True)
+        self.triplet = (
+            WeightedExampleTripletLoss(margin=margin, normalize=False)
+            if margin > 0
+            else None
+        )
 
     def _loss(self, cmgr: CSG, X, Ym, Yb=None, mask=None):
         """
@@ -240,7 +258,7 @@ class ToyNetV1(BIRADsUNet):
             # use ground-truth as guidance
             res = self.forward(X, mask=mask, logit=True)
         else:
-            res = self.forward(X, segment=False, logit=True)
+            res = self.forward(X, segment=False, logit=True, pad_mode="zero")
 
         # ToyNetV1 does not constrain between the two CAMs
         # But may constrain on their own values, if necessary

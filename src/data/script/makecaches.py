@@ -12,10 +12,12 @@ BIRAD_NAME = ["2", "3", "4a", "4b", "4c", "5"]
 M_NAME = ["bengin", "malignant"]
 
 
-def makecache(inpath, outpath, datasets: list, title: list, statTitle=[]):
+def makecache(inpath, outpath, datasets: list, title: list, statTitle=None):
     assert datasets
     if "pid" not in title:
         title.insert(0, "pid")
+    if statTitle is None:
+        statTitle = []
     shapedic = defaultdict(lambda: {k: [] for k in title})
     statdic = {k: defaultdict(int) for k in statTitle}
 

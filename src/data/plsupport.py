@@ -39,7 +39,7 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
         if self.aimsize is None:
             self._tda = None
         else:
-            self._tda = augmentWith(self._td, ElasticAugmentSet, "Ym", self.aimsize)
+            self._tda = augmentWith(self._td, ElasticAugmentSet, "Ym", self.aimsize, device=self.device)
             print("augmented trainset distribution:", self._tda.distribution)
 
     def train_dataloader(self):

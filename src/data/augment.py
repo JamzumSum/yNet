@@ -20,7 +20,7 @@ class VirtualDataset(Distributed, ABC):
 
 class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
     # BUG: Use cuda to augment data is necessary to some extent but conflicts with multiprocessing
-    # in most times. I've not found a method to adopt the both. 
+    # in most times. I've not found a method to adopt the both.
     # see warning in https://pytorch.org/docs/stable/data.html#multi-process-data-loading
     def __init__(
         self, dataset: Distributed, distrib_title: str, aim_size=None, device=None
@@ -59,7 +59,8 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
             self._distrib[i] = (my_distrib.unsqueeze(1) * j).sum(dim=0).round_()
 
         self._indices = [
-            dataset.argwhere(lambda d: d == i, distrib_title) for i in range(self.K(distrib_title))
+            dataset.argwhere(lambda d: d == i, distrib_title)
+            for i in range(self.K(distrib_title))
         ]
         self.cum_distrib = self.cumsum(my_distrib)
 
@@ -78,7 +79,7 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
             x = self.deformation(self.dataset[choice(indices)])
         else:
             x = self.dataset[choice(indices)]
-        x['meta'].aug = self.pid_suffix
+        x["meta"].aug = self.pid_suffix
         return x
 
     def __len__(self):
@@ -95,15 +96,15 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
         pass
 
     @property
-    def meta(self)-> dict:
+    def meta(self) -> dict:
         return self.dataset.meta
 
     @abstractproperty
-    def pid_suffix(self)-> str:
-        return 'aug'
+    def pid_suffix(self) -> str:
+        return "aug"
 
 
-@torch.jit.script
+# @torch.jit.script
 def elastic(X, kernel, padding, alpha=34.0):
     # type: (Tensor, Tensor, int, float) -> Tensor
     """
@@ -179,7 +180,7 @@ class ElasticAugmentSet(AugmentSet):
 
     @property
     def pid_suffix(self):
-        return 'els'
+        return "els"
 
     @staticmethod
     def getFilter(sigma):
@@ -193,14 +194,24 @@ class ElasticAugmentSet(AugmentSet):
 
 
 def augmentWith(
-    dataset: Distributed, aug_class, distrib_title, aim_size, tag=None, *args, **argv
+    dataset: Distributed,
+    aug_class,
+    distrib_title,
+    aim_size,
+    device=None,
+    tag=None,
+    *args,
+    **argv
 ):
     meta = dataset.meta
     if not all(isinstance(i, dict) for i in meta.values()):
         if tag:
             tag = str(tag)
         return DistributedConcatSet(
-            [dataset, aug_class(dataset, distrib_title, aim_size, *args, **argv)],
+            [
+                dataset,
+                aug_class(dataset, distrib_title, aim_size, device, *args, **argv),
+            ],
             tag=[tag, tag + "_aug"] if tag else None,
         )
 
@@ -211,6 +222,7 @@ def augmentWith(
                 aug_class,
                 distrib_title,
                 round(len(D) / len(dataset) * aim_size),
+                device,
                 tag,
                 *args,
                 **argv

@@ -32,16 +32,16 @@ class ConvStack2(ChannelInference):
     def __init__(self, ic, oc, res=False, norm="batchnorm"):
         super().__init__(ic, oc)
         self.res = res
-        norm_layer = {'groupnorm': ChannelNorm, 'batchnorm': nn.BatchNorm2d}[norm]
+        norm_layer = {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm]
         self.CBR = nn.Sequential(
             nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer(oc), nn.ReLU()
         )
-        self.CB = nn.Sequential(
-            nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer(oc)
-        )
+        self.CB = nn.Sequential(nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer(oc))
         if res:
-            self.downsample = nn.Sequential(
-                nn.Conv2d(ic, oc, 1, bias=False), norm_layer(oc)
+            self.downsample = (
+                nn.Sequential(nn.Conv2d(ic, oc, 1, bias=False), norm_layer(oc))
+                if ic != oc
+                else nn.Identity()
             )
 
     def forward(self, X):
@@ -95,7 +95,7 @@ class UpConv(ChannelInference):
             # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
             # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
             nn.Conv2d(ic, ic // 2, 3, 1, 1, bias=False),
-            {'groupnorm': ChannelNorm, 'batchnorm': nn.BatchNorm2d}[norm](ic // 2),
+            {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm](ic // 2),
         )
 
     def forward(self, X):
@@ -110,20 +110,20 @@ class UNetWOHeader(ChannelInference):
     def __init__(
         # fmt: off
         self, ic, level=4, fc=64, *, 
-        memory_trade=False, inner_res=False, norm='batchnorm'
+        memory_trade=False, residual=False, norm='batchnorm'
         # fmt: on
     ):
         super().__init__(ic, fc * 2 ** level)
         self.level = level
         self.cps = CheckpointSupport(memory_trade)
         self.fc = fc
-        self.add_module("L1", ConvStack2(ic, fc, res=inner_res))
+        self.add_module("L1", ConvStack2(ic, fc, res=residual))
         cc = self._L(1).oc
 
         for i in range(level):
             dsample = DownConv(cc, "conv")
             cc = dsample.oc
-            conv = ConvStack2(cc, oc=cc * 2, res=inner_res, norm=norm)
+            conv = ConvStack2(cc, oc=cc * 2, res=residual, norm=norm)
             cc = conv.oc
             self.add_module("D%d" % (i + 1), dsample)
             self.add_module("L%d" % (i + 2), conv)
@@ -131,7 +131,7 @@ class UNetWOHeader(ChannelInference):
         for i in range(level):
             usample = UpConv(cc, norm=norm)
             cc = usample.oc
-            conv = ConvStack2(cc * 2, cc, res=inner_res)
+            conv = ConvStack2(cc * 2, cc, res=residual)
             cc = conv.oc
             self.add_module("U%d" % (i + 1), usample)
             self.add_module("L%d" % (i + self.level + 2), conv)

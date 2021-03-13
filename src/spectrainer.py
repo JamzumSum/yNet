@@ -15,7 +15,7 @@ from common.loss import diceCoefficient
 from common.optimizer import ReduceLROnPlateau, get_arg_default, no_decay
 from common.support import *
 from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
-from common.utils import gray2JET, morph_close
+from common.utils import gray2JET
 from misc.updatedict import shallow_update
 
 plateau_lr_dic = lambda sg, monitor: {
@@ -56,7 +56,7 @@ class ToyNetTrainer(FSMBase):
         super().save_hyperparameters(branch=self.branch_conf)
 
     def forward(self, X):
-        return self.net(X)
+        return self.net(X, segment=False)
 
     def overrided_opsg(self, branches: list):
         op_arg, sg_arg = {}, {}
@@ -184,9 +184,6 @@ class ToyNetTrainer(FSMBase):
 
         if mask is not None:
             res["dice"] = diceCoefficient(seg, mask, reduction="none")
-            res["closed-dice"] = diceCoefficient(
-                morph_close(seg), mask, reduction="none"
-            )
 
         if Yb is not None:
             res["yb"] = Yb
@@ -228,11 +225,6 @@ class ToyNetTrainer(FSMBase):
 
             if self.logSegmap and "dice" in res:
                 self.log("dice/%s" % caption, res["dice"].mean(), logger=True)
-                self.log(
-                    "dice/MORPH_CLOSE/%s" % caption,
-                    res["closed-dice"].mean(),
-                    logger=True,
-                )
 
             for k, (p, y) in items.items():
                 if y not in res:
