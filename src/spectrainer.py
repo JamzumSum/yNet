@@ -56,7 +56,7 @@ class ToyNetTrainer(FSMBase):
         super().save_hyperparameters(branch=self.branch_conf)
 
     def forward(self, X):
-        return self.net(X, segment=False)
+        return self.net(X)
 
     def overrided_opsg(self, branches: list):
         op_arg, sg_arg = {}, {}

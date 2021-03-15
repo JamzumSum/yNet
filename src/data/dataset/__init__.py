@@ -8,7 +8,7 @@ import bisect
 import os
 from abc import ABC, abstractclassmethod
 from collections import defaultdict
-from itertools import product
+from typing import Iterable
 
 import torch
 from misc.indexserial import IndexLoader
@@ -121,7 +121,8 @@ class DistributedSubset(Distributed, Subset):
 
 
 class DistributedConcatSet(Distributed, ConcatDataset):
-    def __init__(self, datasets, tag=None):
+    def __init__(self, datasets: Iterable[Distributed], tag=None):
+        datasets = list(datasets)
         statTitle = unique(sum([i.statTitle for i in datasets], []))
         self.tag = tag
         ConcatDataset.__init__(self, datasets)

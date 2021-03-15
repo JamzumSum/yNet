@@ -78,7 +78,7 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
         return _reduct(ce, reduction)
 
 
-@torch.jit.script
+# @torch.jit.script
 def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     # type: (Tensor, Tensor, float, str) -> Tensor
     r""" computational formula：
@@ -92,4 +92,5 @@ def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     FP = torch.sum(pflat, dim=1) - TP
     FN = torch.sum(gt_flat, dim=1) - TP
     dice = (2 * TP + eps) / (2 * TP + FP + FN + eps)
+    
     return _reduct(dice, reduction)

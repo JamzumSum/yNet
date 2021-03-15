@@ -4,8 +4,8 @@ from unittest import TestCase
 import cv2 as cv
 import torch
 from common.utils import BoundingBoxCrop, morph_close
-from data.augment import ElasticAugmentSet, elastic
-from data.dataset import CachedDatasetGroup
+from data.augment import elastic, scale, translate, getGaussianFilter
+from data.dataset.cacheset import CachedDatasetGroup
 
 gray2numpy = lambda tensor: (
     tensor[0] if tensor.dim() == 3 else tensor if tensor.dim() == 2 else None
@@ -14,17 +14,26 @@ show_gray_tensor = lambda title, tensor: cv.imshow(title, gray2numpy(tensor))
 
 
 class TestAugment(TestCase):
+    def setUp(self):
+        self.ds = CachedDatasetGroup("data/set2/")
+
+    def randomItem(self):
+        rint = randint(0, len(self.ds))
+        print(rint)
+        return self.ds[rint]
+
+    def item(self, i=0):
+        return self.ds[i]
+
     def testElastic(self):
-        o = CachedDatasetGroup("data/BIRADs/ourset.pt")
-        org = o.__getitem__(0)["X"]
-        img = elastic(org, *ElasticAugmentSet.getFilter(4), alpha=34)
+        org = self.item()["X"]
+        img = elastic(org, *getGaussianFilter(4), alpha=34)
         show_gray_tensor("origin", org)
         show_gray_tensor("elastic", img)
         cv.waitKey()
 
     def testMorphClose(self):
-        o = CachedDatasetGroup("data/BIRADs/ourset.pt")
-        org = o.__getitem__(0)["X"]
+        org = self.item()["X"]
         k = 15
         img = morph_close(org, k)
 
@@ -39,10 +48,7 @@ class TestAugment(TestCase):
         cv.waitKey()
 
     def testBoundingBox(self):
-        o = CachedDatasetGroup("data/BUSI/BUSI.pt")
-        rint = randint(0, len(o))
-        print(rint)
-        org = o[rint]
+        org = self.randomItem()
         mask = org["mask"]
         p = torch.randn_like(mask).abs()
         p /= p.max() / 0.4
@@ -58,4 +64,18 @@ class TestAugment(TestCase):
 
         show_gray_tensor("mask", mask)
         show_gray_tensor("roi", roi)
+        cv.waitKey()
+
+    def testScale(self):
+        org = self.randomItem()["X"]
+        img = scale(org, 0.5)
+        show_gray_tensor("org", org)
+        show_gray_tensor("scale", img)
+        cv.waitKey()
+
+    def testTranslate(self):
+        org = self.randomItem()["X"]
+        img = translate(org, 0.1, -0.1)
+        show_gray_tensor("org", org)
+        show_gray_tensor("scale", img)
         cv.waitKey()

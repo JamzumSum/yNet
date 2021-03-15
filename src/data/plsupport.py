@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 
-from .augment import ElasticAugmentSet, augmentWith
+from .augment.offline import ElasticAugmentSet, augmentWith
 from .dataloader import FixLoader, FixBatchLoader
 from .dataset import DistributedConcatSet, classSpecSplit
 from .dataset.cacheset import CachedDatasetGroup

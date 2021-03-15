@@ -12,8 +12,6 @@ from torch.utils.data import (BatchSampler, ConcatDataset, DataLoader,
 
 from data.dataset import Distributed
 
-from .augment import ElasticAugmentSet
-
 mp.set_start_method("spawn", True)
 merge_list = lambda l: sum(l, [])
 
@@ -88,7 +86,7 @@ class DistributedSampler(BatchSampler, DeviceAwareness):
 
         def loopmeta(x):
             nonlocal bfdic
-            bfdic[x['meta'].batchflag][x[distrib_title].item()] += 1
+            bfdic[x["meta"].batchflag][x[distrib_title].item()] += 1
 
         with dataset.no_fetch():
             dataset.argwhere(loopmeta)
@@ -129,7 +127,10 @@ def fixCollate(x):
     x = deep_collate(x, True, ["meta"])
     x.setdefault("Yb", None)
     x.setdefault("mask", None)
-    x["meta"] = {"batchflag": bf}
+    x["meta"] = {
+        "batchflag": bf,
+        'balanced': True
+    }
     return x
 
 

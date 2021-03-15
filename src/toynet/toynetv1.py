@@ -112,7 +112,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         if segment:
             c, seg = self.unet(X)
         else:
-            c = self.unet(X, False)
+            c, seg = self.unet(X, False), None
 
         if not classify:
             return seg
@@ -128,10 +128,10 @@ class BIRADsYNet(YNet, MultiBranch):
         YNet.__init__(self, in_channel, *args, **kwargs)
         cc = self.yoc
         self.zdim = zdim
-        self.mfc = nn.Linear(cc, 2)
-        self.bfc = nn.Linear(cc, K)
         self.sigma = nn.Softmax(dim=1)
         self.proj_mlp = MLP(cc, zdim, [2048, 2048], True, False)  # L3
+        self.mfc = nn.Linear(zdim, 2)
+        self.bfc = nn.Linear(zdim, K)
 
     def branch_weight(self, weight_decay: dict):
         """
@@ -224,14 +224,17 @@ class ToyNetV1(BIRADsYNet):
         z = F.normalize(z, dim=1)
         return -(p * z).sum(dim=1).mean()
 
-    def second_view(self, X, seg):
+    def siamise(self, X, mask, aug_func):
         """
         return the embedding of an augmented view
         """
-        # softmax ensures the min of attentioned image >= 1/H*W*e
-        fused = self.fuse_layer(torch.cat((X, spatial_softmax(seg)), dim=1))
-        fi2 = self.forward(fused, segment=False, classify=True, logit=True)[2]
+        aug = aug_func(X, mask)
+        fi2 = self.forward(aug, segment=False, classify=True, logit=True)[2]
         return fi2
+
+    def fuse_view(self, X, mask):
+        # softmax ensures the min of attentioned image >= 1/H*W*e
+        return self.fuse_layer(torch.cat((X, spatial_softmax(mask)), dim=1))
 
     def _loss(self, cmgr: CSG, X, Ym, Yb=None, mask=None):
         """
@@ -240,9 +243,12 @@ class ToyNetV1(BIRADsYNet):
         piter = cmgr.piter
         res = self.forward(X, segment=True, classify=True, logit=True)
         seg, ft, fi, lm, lb = res
-        fi2 = self.second_view(X, seg.detach())
+        fi2 = self.siamise(X, seg.detach(), self.fuse_view)
 
+        # negative cosine similarity with pred_mlp. 
+        # D is to be used as a symmetrized loss.
         D = lambda p, z: self.neg_cos_sim(self.pred_mlp(p), z)
+
         loss = {
             "pm": F.cross_entropy(lm, Ym, weight=self.mweight),
             "sim": (D(fi, fi2) + D(fi2, fi)) / 2,

@@ -74,11 +74,11 @@ class MLP(nn.Sequential):
         for i in hidden_layers:
             layers.append(nn.Linear(cc, i))
             layers.append(nn.BatchNorm1d(i))
-            layers.append(nn.ReLU)
+            layers.append(nn.ReLU())
             cc = i
         layers.append(nn.Linear(cc, oc))
         if final_bn:
             layers.append(nn.BatchNorm1d(cc))
         if final_relu:
-            layers.append(nn.ReLU)
+            layers.append(nn.ReLU())
         super().__init__(*layers)

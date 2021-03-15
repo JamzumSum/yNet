@@ -42,3 +42,31 @@ def Batched(func):
         return deep_collate(res)
 
     return thatinloader
+
+
+
+def d3support(func, asis=False):
+    """
+    make func(X, *args, **kwargs) that X must be [N, C, H, W] supports [C, H, W]
+    by adding an extra dim before calling func.
+    
+    If asis=False, the output dim will be reduced automatically if inputs' dim=3.
+    """
+
+    @wraps(func)
+    def d3wrapper(X, *args, **kwargs):
+        d3 = X.dim() == 3
+        if d3:
+            X = X.unsqueeze(0)
+        else:
+            assert X.dim() == 4
+
+        X = func(X, *args, **kwargs)
+
+        if not asis and d3 and torch.is_tensor(X) and X.dim() == 4:
+            return X.squeeze(0)
+        else:
+            return X
+
+    return d3wrapper
+

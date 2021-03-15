@@ -212,7 +212,7 @@ class UNet(UNetWOHeader):
 
     def __init__(self, ic, oc, level=4, fc=64, headeroc=None, **kwargs):
         super().__init__(ic, level, fc, **kwargs)
-        self.headers = [nn.Conv2d(self.fc, oc, 1)]
+        self.headers = [nn.Sequential(nn.Conv2d(self.fc, oc, 1), nn.Sigmoid())]
         if headeroc:
             self.headers.extend(
                 nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1), nn.Sigmoid())
