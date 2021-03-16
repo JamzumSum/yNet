@@ -37,7 +37,7 @@ class FSMBase(pl.LightningModule, ABC):
             self.op_cls = getattr(torch.optim, op_conf[0])
             self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
 
-        self.net = Net(**model_conf)
+        self.net = Net(cmgr=self.cosg, **model_conf)
 
     def save_hyperparameters(self, **otherconf):
         conf = {

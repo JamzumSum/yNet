@@ -129,7 +129,8 @@ def fixCollate(x):
     x.setdefault("mask", None)
     x["meta"] = {
         "batchflag": bf,
-        'balanced': True
+        'balanced': True,
+        'augindices': None  # TODO
     }
     return x
 

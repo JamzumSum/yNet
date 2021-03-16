@@ -24,19 +24,74 @@ class ChannelInference(nn.Module):
         self.oc = oc
 
 
+class ParallelLayers(nn.Module):
+    def __init__(self, layers: list, dim=1):
+        super().__init__()
+        for i, layer in enumerate(layers):
+            self.add_module(f"P{i}", layer)
+        self.layers = layers
+        self.dim = dim
+
+    def forward(self, X):
+        return torch.cat([f(X) for f in self.layers], dim=self.dim)
+
+
+class MultiScale(ChannelInference, nn.Sequential):
+    """
+    Multi-scale module by using parallel conv with various dilation rate. 
+    If atrous_num=0, it degenerates to a usual conv3x3.
+
+    NOTE: There should be a conv before this layer according to oridinal implementation.
+    """
+
+    def __init__(self, ic, oc, fc=None, atrous_num=1, bias=True):
+        if atrous_num:
+            if fc is None:
+                fc = self._auto_fc(oc, atrous_num)
+            atrous_layer = [nn.Conv2d(ic, fc, 3, 1, 1)]
+            for i in range(1, atrous_num + 1):
+                atrous_layer.append(nn.Conv2d(ic, fc, 3, 1, i, i))
+
+            conv_ic = fc * (atrous_num + 1)
+        else:
+            conv_ic = ic
+
+        ChannelInference.__init__(self, ic, oc)
+        nn.Sequential.__init__(
+            self,
+            ParallelLayers(atrous_layer) if atrous_num else nn.Identity(),
+            nn.Conv2d(conv_ic, oc, 3, 1, 1, bias=bias),
+        )
+
+    def forward(self, X):
+        return nn.Sequential.forward(self, X)
+
+    @staticmethod
+    def _auto_fc(oc, atrous_num):
+        return (
+            oc // (atrous_num + 1)
+            if oc % (atrous_num + 1) == 0
+            else oc // 2
+            if oc & 1 == 0
+            else oc
+        )
+
+
 class ConvStack2(ChannelInference):
     """
     [N, ic, H, W] -> [N, oc, H, W]
     """
 
-    def __init__(self, ic, oc, res=False, norm="batchnorm"):
+    def __init__(self, ic, oc, res=False, norm="batchnorm", atrous_num=0):
         super().__init__(ic, oc)
         self.res = res
         norm_layer = {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm]
         self.CBR = nn.Sequential(
             nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer(oc), nn.ReLU()
         )
-        self.CB = nn.Sequential(nn.Conv2d(oc, oc, 3, 1, 1, bias=False), norm_layer(oc))
+        self.CB = nn.Sequential(
+            MultiScale(oc, oc, None, atrous_num, False), norm_layer(oc)
+        )
         if res:
             self.downsample = (
                 nn.Sequential(nn.Conv2d(ic, oc, 1, bias=False), norm_layer(oc))
@@ -89,13 +144,9 @@ class UpConv(ChannelInference):
 
     def __init__(self, ic, norm="batchnorm"):
         super().__init__(ic, ic // 2)
-
         self.seq = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-            # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
-            # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
-            nn.Conv2d(ic, ic // 2, 3, 1, 1, bias=False),
-            {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm](ic // 2),
+            nn.ConvTranspose2d(ic, self.oc, 2, 2, bias=False),
+            {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm](self.oc),
         )
 
     def forward(self, X):
@@ -123,7 +174,7 @@ class UNetWOHeader(ChannelInference):
         for i in range(level):
             dsample = DownConv(cc, "conv")
             cc = dsample.oc
-            conv = ConvStack2(cc, oc=cc * 2, res=residual, norm=norm)
+            conv = ConvStack2(cc, cc * 2, residual, norm, max(1, level - i))
             cc = conv.oc
             self.add_module("D%d" % (i + 1), dsample)
             self.add_module("L%d" % (i + 2), conv)

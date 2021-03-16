@@ -29,7 +29,7 @@ datasets:
 flag:
   gpus: [3]
   min_epochs: 40
-  max_epochs: 80
+  max_epochs: 120
   num_sanity_val_steps: 0
   log_every_n_steps: 10
   terminate_on_nan: True
@@ -39,6 +39,9 @@ misc:
   continue: False
   load_from: latest
   use_annotation_from: 0
+  lr_warmup:
+    interval: epoch
+    times: 10
 
 optimizer:
   - AdamW

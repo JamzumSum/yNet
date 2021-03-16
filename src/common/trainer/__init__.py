@@ -11,7 +11,7 @@ import pytorch_lightning as pl
 import torch
 from data.plsupport import DPLSet
 from omegaconf import DictConfig, OmegaConf, ListConfig
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from .richbar import RichProgressBar

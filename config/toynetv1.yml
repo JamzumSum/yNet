@@ -10,6 +10,8 @@ flag:
   limit_test_batches: 1
 
 dataloader:
+  training:
+    batchsize_k: 1
   scoring:
     batch_size: 2
 

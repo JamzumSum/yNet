@@ -125,21 +125,35 @@ class ToyNetTrainer(FSMBase):
     def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_idx, closure, *args, **kwargs):
     # fmt: on
         # warm up lr
-        if self.trainer.global_step < 500:
-            lr_scale = min(1., float(self.trainer.global_step + 1) / 500.)
+        warmup_conf: dict = self.misc.get('lr_warmup', {})
+        if warmup_conf is None:
+            return optimizer.step(closure=closure)
+
+        interval = warmup_conf.get('interval', 'step')
+        times = warmup_conf.get('times', 500)
+
+        if interval == 'epoch':
+            td = self.trainer.train_dataloader
+            total_len = sum(len(i) for i in td) if isinstance(td, (list, tuple)) else len(td)
+            times *= total_len
+
+        if self.trainer.global_step < times:
+            lr_scale = min(1., (self.trainer.global_step + 1.) / times)
             for pg in optimizer.param_groups:
                 pg['lr'] = lr_scale * pg['initial_lr']
 
         # update params
         optimizer.step(closure=closure)
 
-    def training_step(self, batch, batch_idx: int, opid=0):
+    def training_step(self, batch: dict, batch_idx: int, opid=0):
         if opid == 0:
 
-            X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
             if self.current_epoch < self.discardYbEpoch:
                 Yb = None
-            res, loss, summary = self.net.lossWithResult(self.cosg, X, Ym, Yb, mask)
+            res, lossdic = self.net.loss(**batch)
+            loss = self.net.multiTaskLoss(lossdic)
+            summary = self.net.lossSummary(lossdic)
+            del lossdic
 
             self.log("train_loss", loss, logger=False, prog_bar=True)
             self.log_dict(summary)
@@ -150,32 +164,33 @@ class ToyNetTrainer(FSMBase):
 
         elif opid == 1:
 
+            Ym, Yb = batch["Ym"], batch["Yb"]
             res = self.buf[0][-2:]
             loss = self.net.discriminatorLoss(self.cosg, *res, Ym, Yb)
             self.log("dis_loss", loss, prog_bar=True, logger=False)
 
         return loss
 
-    def validation_step(self, batch, batch_idx, dataloader_idx=0):
+    def validation_step(self, batch: dict, batch_idx, dataloader_idx=0):
         if dataloader_idx == 1:
             return
-        X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
 
         if self.current_epoch < self.discardYbEpoch:
-            Yb = None
-        loss, _ = self.net.loss(self.cosg, X, Ym, Yb, mask)
+            batch['Yb'] = None
+        _, loss = self.net.loss(**batch)
+        loss = self.net.multiTaskLoss(loss)
         self.log("val_loss", loss, prog_bar=True, logger=False)
         return loss
 
     def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
-        seg, embed, Pm, Pb = self.net(X)
+        seg, ft, fi, Pm, Pb = self.net(X)
 
         res = {
             "pm": Pm,
             "pb": Pb,
             "ym": Ym,
-            "c": embed,
+            "c": ft,    # use either ft or fi as embedding. fi is batchnorm-ed, ft hasn't.
         }
         if self.adversarial:
             cy0 = self.net.D(Pm, Pb)

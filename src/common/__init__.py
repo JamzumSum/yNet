@@ -3,6 +3,11 @@ from collections import defaultdict
 
 
 @torch.jit.script
+def yes(p: float):
+    return torch.rand(()) < p
+
+
+@torch.jit.script
 def freeze(tensor, f=0.0):
     # type: (Tensor, float) -> Tensor
     return (1 - f) * tensor + f * tensor.detach()
