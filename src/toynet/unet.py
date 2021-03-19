@@ -8,29 +8,42 @@ A torch implement for U-Net.
 """
 import torch
 import torch.nn as nn
-from common.decorators import checkpoint, CheckpointSupport
 from common.support import SelfInitialed
+from common.decorators import autoPropertyClass, CheckpointSupport
 
 
-class ChannelNorm(nn.GroupNorm):
-    def __init__(self, ic, channels=16, *args, **kwargs):
-        super().__init__(max(1, ic // channels), ic, *args, **kwargs)
-
-
+@autoPropertyClass
 class ChannelInference(nn.Module):
+    ic: int
+    oc: int
+
     def __init__(self, ic: int, oc: int):
         super().__init__()
-        self.ic = ic
-        self.oc = oc
 
 
+class ChannelNorm(ChannelInference, nn.GroupNorm):
+    def __init__(self, ic, channels=16, *args, **kwargs):
+        nn.GroupNorm.__init__(self, max(1, ic // channels), ic, *args, **kwargs)
+        ChannelInference.__init__(self, ic, ic)
+
+
+def norm_layer(norm: str, ndim=2):
+    return {
+        "batchnorm": [nn.BatchNorm1d, nn.BatchNorm2d][ndim - 1],
+        "groupnorm": ChannelNorm,
+        "none": nn.Identity,
+    }[norm]
+
+
+@autoPropertyClass
 class ParallelLayers(nn.Module):
+    dim: int
+
     def __init__(self, layers: list, dim=1):
         super().__init__()
         for i, layer in enumerate(layers):
             self.add_module(f"P{i}", layer)
         self.layers = layers
-        self.dim = dim
 
     def forward(self, X):
         return torch.cat([f(X) for f in self.layers], dim=self.dim)
@@ -77,24 +90,30 @@ class MultiScale(ChannelInference, nn.Sequential):
         )
 
 
+@autoPropertyClass
 class ConvStack2(ChannelInference):
     """
     [N, ic, H, W] -> [N, oc, H, W]
     """
 
-    def __init__(self, ic, oc, res=False, norm="batchnorm", atrous_num=0):
+    res: bool
+
+    def __init__(self, ic, oc, *, res=False, norm="batchnorm", atrous_num=0):
         super().__init__(ic, oc)
-        self.res = res
-        norm_layer = {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm]
+
+        # nonlinear = nn.ELU if ic < oc else nn.ReLU
+        nonlinear = nn.ReLU
+        bias = norm == "none"
+
         self.CBR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1, bias=False), norm_layer(oc), nn.ReLU()
+            nn.Conv2d(ic, oc, 3, 1, 1, bias=bias), norm_layer(norm)(oc), nonlinear(),
         )
         self.CB = nn.Sequential(
-            MultiScale(oc, oc, None, atrous_num, False), norm_layer(oc)
+            MultiScale(oc, oc, None, atrous_num, bias), norm_layer(norm)(oc)
         )
         if res:
             self.downsample = (
-                nn.Sequential(nn.Conv2d(ic, oc, 1, bias=False), norm_layer(oc))
+                nn.Sequential(nn.Conv2d(ic, oc, 1, bias=bias), norm_layer(norm)(oc))
                 if ic != oc
                 else nn.Identity()
             )
@@ -137,50 +156,69 @@ class DownConv(ChannelInference):
         return self.pool(X)
 
 
-class UpConv(ChannelInference):
+class UpConv(ChannelInference, nn.Sequential):
     """
     [N, C, H, W] -> [N, C//2, H*2, W*2]
     """
 
-    def __init__(self, ic, norm="batchnorm"):
-        super().__init__(ic, ic // 2)
-        self.seq = nn.Sequential(
-            nn.ConvTranspose2d(ic, self.oc, 2, 2, bias=False),
-            {"groupnorm": ChannelNorm, "batchnorm": nn.BatchNorm2d}[norm](self.oc),
-        )
+    def __init__(self, ic, norm="batchnorm", transConv=False):
+        ChannelInference.__init__(self, ic, ic // 2)
+        bias = norm == "none"
+
+        if transConv:
+            layers = [nn.ConvTranspose2d(ic, self.oc, 2, 2, bias=False)]
+        else:
+            layers = [
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+                # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
+                # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
+                # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
+                nn.Conv2d(ic, ic // 2, 1, bias=bias),
+            ]
+        layers.append(norm_layer(norm)(self.oc))
+        nn.Sequential.__init__(self, *layers)
 
     def forward(self, X):
-        return self.seq(X)
+        return nn.Sequential.forward(self, X)
 
 
+@autoPropertyClass
 class UNetWOHeader(ChannelInference):
     """
     [N, ic, H, W] -> [N, fc * 2^level, H, W], [N, fc, H, W]
     """
 
+    level: int
+    fc: int
+    cps: CheckpointSupport
+
     def __init__(
         # fmt: off
         self, ic, level=4, fc=64, *, 
-        memory_trade=False, residual=False, norm='batchnorm'
+        cps=None, residual=False, norm='batchnorm', 
+        multiscale=False, transConv=False
         # fmt: on
     ):
         super().__init__(ic, fc * 2 ** level)
-        self.level = level
-        self.cps = CheckpointSupport(memory_trade)
-        self.fc = fc
         self.add_module("L1", ConvStack2(ic, fc, res=residual))
         cc = self._L(1).oc
 
         for i in range(level):
             dsample = DownConv(cc, "conv")
             cc = dsample.oc
-            conv = ConvStack2(cc, cc * 2, residual, norm, max(1, level - i))
+            conv = ConvStack2(
+                cc,
+                cc * 2,
+                res=residual,
+                norm=norm,
+                atrous_num=max(1, level - i) if multiscale else 0,
+            )
             cc = conv.oc
             self.add_module("D%d" % (i + 1), dsample)
             self.add_module("L%d" % (i + 2), conv)
 
         for i in range(level):
-            usample = UpConv(cc, norm=norm)
+            usample = UpConv(cc, norm=norm, transConv=transConv)
             cc = usample.oc
             conv = ConvStack2(cc * 2, cc, res=residual)
             cc = conv.oc
@@ -247,8 +285,9 @@ class UNetWOHeader(ChannelInference):
         return xn[self.level], xn[-1]
 
 
+@autoPropertyClass
 class UNet(UNetWOHeader):
-    """
+    r"""
     Add multiple parallel header along with original segment header.
     illustrate:
         finalx ---conv-> seg1 (original header)
@@ -260,8 +299,9 @@ class UNet(UNetWOHeader):
         e.g.    bottomx, seg
                 bottomx, seg1, add_seg1, add_seg2, ...
     """
+    oc: int
 
-    def __init__(self, ic, oc, level=4, fc=64, headeroc=None, **kwargs):
+    def __init__(self, ic, oc, level=4, fc=64, *, headeroc=None, **kwargs):
         super().__init__(ic, level, fc, **kwargs)
         self.headers = [nn.Sequential(nn.Conv2d(self.fc, oc, 1), nn.Sigmoid())]
         if headeroc:
@@ -272,11 +312,12 @@ class UNet(UNetWOHeader):
         for i, f in enumerate(self.headers):
             self.add_module("header %d" % (i + 1), f)
 
-    def forward(self, X, expand: bool = True):
+    def forward(self, X, expand: bool = True) -> dict:
         bottomx, finalx = UNetWOHeader.forward(self, X, expand)
+        r = {"bottom": bottomx}
         if not expand:
-            return bottomx
+            return r
 
-        r = [bottomx]
-        r.extend(f(finalx) for f in self.headers)
+        for i, f in enumerate(self.headers):
+            r[f"seg{i}"] = f(finalx)
         return r

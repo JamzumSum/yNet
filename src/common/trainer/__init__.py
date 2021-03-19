@@ -29,6 +29,9 @@ class Trainer(pl.Trainer):
             callbacks=[checkpoint_callback, RichProgressBar()],
             default_root_dir=checkpoint_callback.dirpath,
             logger=self._getTensorBoardLogger(),
+            num_sanity_val_steps=0,
+            terminate_on_nan=True,
+            log_every_n_steps=10,
             **flag
         )
 

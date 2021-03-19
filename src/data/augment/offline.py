@@ -7,7 +7,7 @@ import torch
 from common.support import DeviceAwareness
 
 from ..dataset import Distributed, DistributedConcatSet
-from . import elastic, getGaussianFilter, scale, translate
+from . import elastic, getGaussianFilter, affine
 
 first = lambda it: next(iter(it))
 
@@ -53,9 +53,8 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
         self.dataset = dataset
         self.suffix = suffix
         DeviceAwareness.__init__(self, device)
-        assert not all(
-            isinstance(i, dict) for i in dataset.meta.values()
-        ), "Augment source set must be uniform."
+        assert not all(isinstance(i, dict) for i in dataset.meta.values()
+                       ), "Augment source set must be uniform."
 
         self.distrib_title = distrib_title
         Distributed.__init__(self, dataset.statTitle)
@@ -66,14 +65,13 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
             avg = aim_size // self.K(distrib_title)
 
         org_distrib = self.dataset.getDistribution(distrib_title)
-        my_distrib = avg * torch.ones_like(org_distrib, dtype=torch.int) - org_distrib
+        my_distrib = avg * torch.ones_like(org_distrib,
+                                           dtype=torch.int) - org_distrib
 
         if torch.any(my_distrib < 0):
-            print(
-                "At least one class has samples more than %d // %d = %d."
-                "These classes wont be sampled when augumenting."
-                % (aim_size, self.K(distrib_title), avg)
-            )
+            print("At least one class has samples more than %d // %d = %d. "
+                  "These classes wont be sampled when augumenting." %
+                  (aim_size, self.K(distrib_title), avg))
             my_distrib.clamp_(min=0)
 
         self._distrib = {distrib_title: my_distrib}
@@ -82,7 +80,8 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
                 continue
             j = dataset.joint(distrib_title, i)
             j = j / j.sum(dim=1, keepdim=True)
-            self._distrib[i] = (my_distrib.unsqueeze(1) * j).sum(dim=0).round_()
+            self._distrib[i] = (my_distrib.unsqueeze(1) *
+                                j).sum(dim=0).round_()
 
         self._indices = [
             dataset.argwhere(lambda d: d == i, distrib_title)
@@ -132,15 +131,14 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
 
 class ElasticAugmentSet(AugmentSet):
     """
-    Elastic deformation w/o random affine.
-    """
-
+	Elastic deformation w/o random affine.
+	"""
     def __init__(self, *args, sigma=4, alpha: tuple = 34, **kwargs):
         """
-        - kernel: size of gaussian kernel. int or tuple/list
-        - sigma: sigma of gaussian filter.
-        - alpha: mean and std of coefficient of elastic deformation.
-        """
+		- kernel: size of gaussian kernel. int or tuple/list
+		- sigma: sigma of gaussian filter.
+		- alpha: mean and std of coefficient of elastic deformation.
+		"""
         AugmentSet.__init__(self, *args, **kwargs, suffix="els")
         if isinstance(alpha, (int, float)):
             std = max(1, abs(34 - alpha))
@@ -196,7 +194,7 @@ class TransAugmentSet(AugmentSet):
         assert len(dyrange) == 2
         tx = torch.empty(()).uniform_(*dxrange).item()
         ty = torch.empty(()).uniform_(*dyrange).item()
-        return translate(X, tx, ty)
+        return affine(X, tx, ty)
 
     def deformation(self, item):
         return self.deformItem(item, self.dxrange, self.dyrange)
@@ -214,37 +212,43 @@ class ScaleAugmentSet(AugmentSet):
     def deformItem(X, scalerange):
         assert len(scalerange) == 2
         sc = torch.empty(()).uniform_(*scalerange).item()
-        return scale(X, sc)
+        return affine(X, scale=sc)
 
     def deformation(self, item):
         return self.deformItem(item, self.scalerange)
 
 
 def augmentWith(
-    # fmt: off
-    dataset: Distributed, aug_class, distrib_title: str, aim_size: int,
-    device=None, tag=None, *args, **argv
+        # fmt: off
+        dataset: Distributed,
+        aug_class,
+        distrib_title: str,
+        aim_size: int,
+        device=None,
+        tag=None,
+        *args,
+        **argv
     # fmt: on
 ):
     meta = dataset.meta
     if not all(isinstance(i, dict) for i in meta.values()):
         if tag:
             tag = str(tag)
-        augset = aug_class(
-            dataset, distrib_title, aim_size, *args, **argv, device=device
-        )
+        augset = aug_class(dataset,
+                           distrib_title,
+                           aim_size,
+                           *args,
+                           **argv,
+                           device=device)
         return DistributedConcatSet(
-            [dataset, augset], tag=[tag, tag + "_aug"] if tag else None,
+            [dataset, augset],
+            tag=[tag, tag + "_aug"] if tag else None,
         )
 
     # TODO: How to estimate?
     estim_size = lambda D: round(len(D) / len(dataset) * aim_size)
     return DistributedConcatSet(
-        (
-            augmentWith(
-                D, aug_class, distrib_title, estim_size(D), device, tag, *args, **argv
-            )
-            for tag, D in dataset.taged_datasets
-        ),
+        (augmentWith(D, aug_class, distrib_title, estim_size(D), device, tag, *
+                     args, **argv) for tag, D in dataset.taged_datasets),
         tag=[str(i) + "&aug" for i in dataset.tag],
     )

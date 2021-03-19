@@ -1,3 +1,7 @@
+from omegaconf import OmegaConf, DictConfig
+from functools import partial
+
+
 class CoefficientScheduler:
     __slots__ = "_fs", "_varmap", "_var", "__op__", "__curmap"
 
@@ -8,14 +12,26 @@ class CoefficientScheduler:
         self.__op__ = {}
         exec("from math import *", None, self.__op__)
 
+    def _ge(self, name, default=None):
+        if isinstance(self._fs, dict):
+            return self._fs.get(name, default)
+        elif isinstance(self._fs, DictConfig):
+            if (r := OmegaConf.select(self._fs, name)) is None:
+                return default
+            else:
+                return r
+
     def update(self, **var):
         self._var.update(var)
-        self.__curmap = {v: self._var[k] for k, v in self._varmap.items() if k in self._var}
+        self.__curmap = {
+            v: self._var[k]
+            for k, v in self._varmap.items() if k in self._var
+        }
 
     def get(self, varname, default: str = None) -> float:
         if varname not in self._fs and default is None:
             raise KeyError(varname)
-        f = self._fs.get(varname, default)
+        f = self._ge(varname, default)
         if isinstance(f, str):
             # Safety warning: eval
             r = eval(f, self.__op__, self.__curmap)
@@ -32,4 +48,3 @@ class CoefficientScheduler:
             return super().__getattribute__(name)
         except AttributeError:
             return self._var[name]
-

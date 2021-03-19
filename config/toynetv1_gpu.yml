@@ -1,13 +1,13 @@
 model:
   in_channel: 1
   K: 6  # 2, 3, 4a, 4b, 4c, 5
-  width: 16
+  width: 32
 
   # for (512, 512) image, unet level + ypath level <= 8
-  ulevel: 3
+  ulevel: 4
   # ypath like res34: [4, 6, 3]
   # ypath like res18: [2, 2, 2]
-  ylevels: [2, 2, 2]
+  ylevels: [2, 2]
 
   # margin when calculating triplet loss
   margin: 0.3
@@ -17,8 +17,8 @@ model:
 
 # coefficients when calculating multi-task loss
 coefficients:
-  task_tm: 0.5 * x ** 4
-  task_seg: 1 - 0.2 * (x ** 0.5)
+  task:
+    tm: 0.5 * x ** 4
 
 datasets:
   - set2
@@ -30,15 +30,11 @@ flag:
   gpus: [3]
   min_epochs: 40
   max_epochs: 120
-  num_sanity_val_steps: 0
-  log_every_n_steps: 10
-  terminate_on_nan: True
 
 misc:
   augment: 1200
   continue: False
   load_from: latest
-  use_annotation_from: 0
   lr_warmup:
     interval: epoch
     times: 10

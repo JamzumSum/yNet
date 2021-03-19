@@ -70,6 +70,13 @@ class FSMBase(pl.LightningModule, ABC):
     ######################## hooks defined below ##############################
     ###########################################################################
 
+    def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
+        op = self.trainer.optimizers[0]
+        lr = op.param_groups[0]["lr"]
+        if lr < 1e-8:
+            return -1
+        self.log("lr", lr, True, True, True, False)
+
     def on_train_epoch_start(self):
         # self.cosg.update(piter=self.piter, max_epochs=self.trainer.max_epochs)
         self.cosg.update(piter=self.piter)

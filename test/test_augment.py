@@ -4,7 +4,7 @@ from unittest import TestCase
 import cv2 as cv
 import torch
 from common.utils import BoundingBoxCrop, morph_close
-from data.augment import elastic, scale, translate, getGaussianFilter
+from data.augment import elastic, affine, getGaussianFilter
 from data.dataset.cacheset import CachedDatasetGroup
 
 gray2numpy = lambda tensor: (
@@ -47,35 +47,16 @@ class TestAugment(TestCase):
         cv.imshow("close_cv", img_np)
         cv.waitKey()
 
-    def testBoundingBox(self):
-        org = self.randomItem()
-        mask = org["mask"]
-        p = torch.randn_like(mask).abs()
-        p /= p.max() / 0.4
-        mask = mask + p
-        u = 32
-        crop = BoundingBoxCrop(0.5, u)
-
-        roi = crop(mask.unsqueeze(0))[0][0]
-
-        self.assertTrue(any(i > 0 for i in roi.shape))
-        self.assertTrue(roi.size(0) % u == 0)
-        self.assertTrue(roi.size(1) % u == 0)
-
-        show_gray_tensor("mask", mask)
-        show_gray_tensor("roi", roi)
-        cv.waitKey()
-
-    def testScale(self):
+    def testRotateScale(self):
         org = self.randomItem()["X"]
-        img = scale(org, 0.5)
+        img = affine(org, scale=0.5, angle=30)
         show_gray_tensor("org", org)
         show_gray_tensor("scale", img)
         cv.waitKey()
 
     def testTranslate(self):
         org = self.randomItem()["X"]
-        img = translate(org, 0.1, -0.1)
+        img = affine(org, 0.1, -0.1)
         show_gray_tensor("org", org)
         show_gray_tensor("scale", img)
         cv.waitKey()
