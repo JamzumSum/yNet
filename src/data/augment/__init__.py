@@ -51,7 +51,7 @@ def elastic(X, kernel, padding, alpha=34.0):
 @d3support()
 def affine(X, dx=0., dy=0., scale=1., angle=0., interpolation='bilinear'):
     rad = radians(angle)
-    theta = torch.Tensor(
+    theta = torch.tensor(
         [[cos(rad) / scale, sin(-rad), -dx], 
         [sin(rad), cos(rad) / scale, -dy]],
         device=X.device,

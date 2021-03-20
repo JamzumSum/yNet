@@ -20,7 +20,7 @@ from common.loss.triplet import WeightedExampleTripletLoss
 from data.augment.online import RandomAffine
 from misc import CoefficientScheduler as CSG
 
-__all__ = ["SiamiseBase", "TripletBase", "CEBase", "MSESegBase"]
+__all__ = ["SiameseBase", "TripletBase", "CEBase", "MSESegBase"]
 
 
 class LossBase(ABC):
@@ -35,7 +35,7 @@ class LossBase(ABC):
         pass
 
 
-class SiamiseBase(LossBase):
+class SiameseBase(LossBase):
     def __init__(self, cmgr, holder, zdim: int, msebase=None, **aug_conf):
         super().__init__(cmgr)
         self.p = holder
@@ -69,7 +69,7 @@ class SiamiseBase(LossBase):
 
         r = {"sim": (D(fi, fi2) + D(fi2, fi)) / 2}
         if mask is not None:
-            r['seg_aug'] = self.mse(d['seg'], mask)
+            r['seg_aug'] = self.mse(d['seg'], mask)['seg']
         return r
 
     def parameters(self):

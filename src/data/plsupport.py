@@ -34,7 +34,7 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
         self._td, self._vd = classSpecSplit(self._ad, *self.tv, self.distrib_title)
         print("trainset distribution:", self._td.distribution)
         print("validation distribution:", self._vd.distribution)
-        self.score_caption = ("validation", "testset")
+        self.score_caption = ("validation", "trainset")
 
         if self.aimsize is None:
             self._tda = None

@@ -3,7 +3,6 @@ from typing import Iterable
 import torch
 import torch.nn.functional as F
 from common.decorators import d3support
-from torchvision.transforms import RandomAffine as RA
 from common.decorators import autoPropertyClass
 from . import affine
 
@@ -37,13 +36,37 @@ class RandomAffine(torch.nn.Module):
         r = self._affine(img)
         return torch.split(r, N)
 
+    @staticmethod
+    def get_params(degrees, translate, scale_ranges):
+        """Get parameters for affine transformation
+
+        Returns:
+            params to be passed to the affine transformation
+        """
+        angle = float(
+            torch.empty(1).uniform_(float(degrees[0]),
+                                    float(degrees[1])).item())
+        if translate is not None:
+            max_dx = float(translate[0])
+            max_dy = float(translate[1])
+            tx = torch.empty(1).uniform_(-max_dx, max_dx).item()
+            ty = torch.empty(1).uniform_(-max_dy, max_dy).item()
+            translations = (tx, ty)
+        else:
+            translations = (0, 0)
+
+        if scale_ranges is not None:
+            scale = float(
+                torch.empty(1).uniform_(scale_ranges[0],
+                                        scale_ranges[1]).item())
+        else:
+            scale = 1.0
+        return angle, translations, scale
+
     def _affine(self, img):
-        WH = [img.shape[-1], img.shape[-2]]
-        angle, (dx, dy), scale, _ = RA.get_params(
+        angle, (dx, dy), scale = self.get_params(
             self.degrees,
             self.translate,
             self.scale,
-            None,
-            WH,
         )
         return affine(img, dx, dy, scale, angle)

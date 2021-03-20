@@ -126,7 +126,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         self.triplet = TripletBase(cmgr, margin, False)
         self.ce = CEBase(cmgr, self)
         self.segmse = MSESegBase(cmgr)
-        self.siamise = SiamiseBase(cmgr, self, self.ynet.zdim, self.segmse)
+        self.siamese = SiameseBase(cmgr, self, self.ynet.zdim, self.segmse)
 
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)
@@ -139,7 +139,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         seg = r["seg"]
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
-        loss.update(self.siamise(X, seg, r["fi"]))
+        # loss.update(self.siamese(X, r["fi"], mask))
         loss.update(self.segmse(seg, mask))
 
         if meta["balanced"]:
@@ -176,7 +176,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
     def branch_weight(self, weight_decay: dict):
         d = self.ynet.branch_weight(weight_decay)
-        p = self.siamise.parameters()
+        p = self.siamese.parameters()
         d['M'] += p
         return d
     

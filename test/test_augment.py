@@ -6,6 +6,7 @@ import torch
 from common.utils import BoundingBoxCrop, morph_close
 from data.augment import elastic, affine, getGaussianFilter
 from data.dataset.cacheset import CachedDatasetGroup
+from data.augment.online import RandomAffine
 
 gray2numpy = lambda tensor: (
     tensor[0] if tensor.dim() == 3 else tensor if tensor.dim() == 2 else None
@@ -60,3 +61,26 @@ class TestAugment(TestCase):
         show_gray_tensor("org", org)
         show_gray_tensor("scale", img)
         cv.waitKey()
+
+class TestOnline(TestCase):
+    def setUp(self):
+        self.ds = CachedDatasetGroup("data/BUSI/")
+
+    def randomItem(self):
+        rint = randint(0, len(self.ds))
+        print(rint)
+        return self.ds[rint]
+
+    def item(self, i=0):
+        return self.ds[i]
+
+    def testRandomAffine(self):
+        ra = RandomAffine(10, .1, .7)
+        for _ in range(20):
+            d = self.randomItem()
+            X, mask = ra(d['X'], d['mask'])
+            show_gray_tensor('org', d['X'])
+            show_gray_tensor('org_mask', d['mask'])
+            show_gray_tensor('affine', X)
+            show_gray_tensor('mask_affine', mask)
+            cv.waitKey()
