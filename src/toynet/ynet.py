@@ -8,8 +8,9 @@ The additional path is used of embedding learning.
 from itertools import chain
 
 import torch.nn as nn
-from common.decorators import CheckpointSupport, autoPropertyClass
+from common.decorators import autoPropertyClass
 from common.support import SegmentSupported, SelfInitialed
+from misc import CheckpointSupport
 
 from .unet import ChannelNorm, ConvStack2, DownConv, UNet
 
@@ -24,6 +25,8 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         in_channel,
         width=64,
         ulevel=4,
+        cps: CheckpointSupport = None,
+        *,
         ylevels: list = None,
         memory_trade=False,
         residual=True,
@@ -36,14 +39,13 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         if ylevels is None:
             ylevels = []
         self.ylevel = len(ylevels)
-        self.cps = CheckpointSupport(memory_trade)
 
         self.unet = UNet(
             in_channel,
             1,
             ulevel,
-            width,  # fmt: skip
-            cps=self.cps,
+            width,                             # fmt: skip
+            cps=cps,
             residual=residual,
             norm=norm,
             multiscale=multiscale,
@@ -56,9 +58,9 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
 
         for ylevel, i in gen:
             if i % ylevel:
-                ylayers.append(self.cps(ConvStack2(cc, cc, **uniarg)))
+                ylayers.append(cps(ConvStack2(cc, cc, **uniarg)))
             else:
-                ylayers.append(self.cps(ConvStack2(cc, 2 * cc, **uniarg)))
+                ylayers.append(cps(ConvStack2(cc, 2 * cc, **uniarg)))
                 ylayers.append(DownConv(2 * cc))
             cc = ylayers[-1].oc
         self.yoc = cc
@@ -73,9 +75,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
                     continue
                 m.selfInit()
             elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight,
-                                        mode="fan_out",
-                                        nonlinearity="relu")
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -111,5 +111,5 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         c = d["bottom"]
         if self.ylevel:
             c = self.ypath(c)
-        r["ft"] = self.pool(c)[..., 0, 0]  # [N, D], D = fc * 2^(ul + yl)
+        r["ft"] = self.pool(c)[..., 0, 0]      # [N, D], D = fc * 2^(ul + yl)
         return r

@@ -61,18 +61,19 @@ class ToyNetTrainer(FSMBase):
         op_arg, sg_arg = {}, {}
         for k in branches:
             d = self.branch_conf.get(k, {})
-            op_arg[k] = shallow_update(self.op_conf,
-                                       d.get("optimizer", self.op_conf), True)
-            sg_arg[k] = shallow_update(self.sg_conf,
-                                       d.get("scheduler", self.sg_conf), True)
+            op_arg[k] = shallow_update(
+                self.op_conf, d.get("optimizer", self.op_conf), True
+            )
+            sg_arg[k] = shallow_update(
+                self.sg_conf, d.get("scheduler", self.sg_conf), True
+            )
         return op_arg, sg_arg
 
     def configure_optimizers(self):
         branchstr = "MBD" if self.adversarial else "MB"
         op_arg, sg_arg = self.overrided_opsg(branchstr)
 
-        get_op_init_default = lambda arg: get_arg_default(
-            self.op_cls.__init__, arg)
+        get_op_init_default = lambda arg: get_arg_default(self.op_cls.__init__, arg)
         default_decay, default_lr = (
             get_op_init_default("weight_decay"),
             get_op_init_default("lr"),
@@ -94,15 +95,14 @@ class ToyNetTrainer(FSMBase):
             msg_param_key = ["G"]
 
         paramdic, param_group_key = no_decay(
-            weight_decay, paramdic, op_arg, self.op_conf.get("lr", default_lr))
+            weight_decay, paramdic, op_arg, self.op_conf.get("lr", default_lr)
+        )
 
         mop_param = [paramdic[k] for k in mop_param_key if k in paramdic]
         mop = self.op_cls(mop_param, **self.op_conf)
         ops = [mop]
         if self.adversarial:
-            dop_param = [
-                v for k, v in paramdic.items() if k not in mop_param_key
-            ]
+            dop_param = [v for k, v in paramdic.items() if k not in mop_param_key]
             ops.append(self.op_cls(dop_param, **self.op_conf))
 
         if not any(sg_arg.values()):
@@ -114,9 +114,7 @@ class ToyNetTrainer(FSMBase):
             msg = ReduceLROnPlateau(mop, msg_param)
             sgs.append(plateau_lr_dic(msg, "val_loss"))
         if self.adversarial:
-            dsg_param = [
-                sg_arg[k] for k in param_group_key if k not in msg_param_key
-            ]
+            dsg_param = [sg_arg[k] for k in param_group_key if k not in msg_param_key]
             if dsg_param:
                 dsg = ReduceLROnPlateau(ops[-1], dsg_param)
                 sgs.append(plateau_lr_dic(dsg, "dis_loss"))
@@ -124,8 +122,10 @@ class ToyNetTrainer(FSMBase):
         return ops, sgs
 
     # fmt: off
-    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_idx,
-                       closure, *args, **kwargs):
+    def optimizer_step(
+        self, current_epoch, batch_nb, optimizer, optimizer_idx, closure, *args,
+        **kwargs
+    ):
         # fmt: on
         # warm up lr
         warmup_conf: dict = self.misc.get('lr_warmup', {})
@@ -137,9 +137,8 @@ class ToyNetTrainer(FSMBase):
 
         if interval == 'epoch':
             td = self.trainer.train_dataloader
-            total_len = sum(
-                len(i) for i in td) if isinstance(td,
-                                                  (list, tuple)) else len(td)
+            total_len = sum(len(i)
+                            for i in td) if isinstance(td, (list, tuple)) else len(td)
             times *= total_len
 
         if self.trainer.global_step < times:
@@ -192,8 +191,8 @@ class ToyNetTrainer(FSMBase):
             "pm": Pm,
             "pb": Pb,
             "ym": Ym,
-            "c":
-            r['ft'],  # use either ft or fi as embedding. fi is batchnorm-ed, ft hasn't.
+            "c": r['fi'
+                   ],      # use either ft or fi as embedding. fi is batchnorm-ed, ft hasn't.
         }
         if self.adversarial:
             cy0 = self.net.D(Pm, Pb)
@@ -207,13 +206,14 @@ class ToyNetTrainer(FSMBase):
             res["yb"] = Yb
         if self.adversarial and Yb is not None:
             cy1 = self.net.D(
-                # TODO: perturbations
+                                                                              # TODO: perturbations
                 F.one_hot(Ym, num_classes=2).float(),
                 F.one_hot(Yb, num_classes=self.net.K).float(),
             )
             res["cy"] = torch.cat((res["cy"], cy1), dim=0)
             res["cy-GT"] = torch.cat(
-                (res["cy-GT"], torch.ones_like(cy1, dtype=torch.long)), dim=0)
+                (res["cy-GT"], torch.ones_like(cy1, dtype=torch.long)), dim=0
+            )
 
         if dataloader_idx == 0:
             # validation
@@ -267,7 +267,8 @@ class ToyNetTrainer(FSMBase):
                     p = p[:, -1]
                 if p.dim() == 1:
                     self.logger.experiment.add_pr_curve(
-                        "%s/%s" % (k, caption), p, y, self.current_epoch)
+                        "%s/%s" % (k, caption), p, y, self.current_epoch
+                    )
                     self.logger.experiment.add_histogram(
                         "distribution/%s/%s" % (k, caption),
                         p,
@@ -281,13 +282,13 @@ class ToyNetTrainer(FSMBase):
                     )
 
     def log_images(self, X, caption):
-        X = X[:8]  # log only 8 images for a pretty present.
+        X = X[:8]                                                                    # log only 8 images for a pretty present.
         heatmap = lambda x, s: 0.7 * x + 0.1 * gray2JET(s, thresh=0.1)
         if self.logHotmap:
             M, B, mw, bw = self.net(X)
-            wsum = lambda x, w: (x * unsqueeze_as(
-                w / w.sum(dim=1, keepdim=True), x)).sum(dim=1)
-            # Now we generate CAM even if dataset is BIRADS-unannotated.
+            wsum = lambda x, w: (x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)
+                                 ).sum(dim=1)
+                                                                                     # Now we generate CAM even if dataset is BIRADS-unannotated.
             self.logger.experiment.add_images(
                 "%s/CAM malignant" % caption,
                 heatmap(M, wsum(M, mw)),
@@ -308,51 +309,9 @@ class ToyNetTrainer(FSMBase):
             )
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
-        X, ym, yb, detail = batch["X"], batch["Ym"], batch["Yb"], batch[
-            "detail"]
+        X, ym, yb, detail = batch["X"], batch["Ym"], batch["Yb"], batch["meta"]
         r = self.net(X, segment=False)
         pm, pb = r['pm'], r['pb']
-        ym_hat = pm.argmax(dim=1)
 
-        err = 1 - self.acc(pm, ym)
-        self.acc.reset()
-        self.log("err/B-M/all",
-                 err,
-                 on_step=False,
-                 on_epoch=False,
-                 logger=True)
-
-        for c, cname in enumerate(("benign", "malignant")):
-            ym_mask = ym == c
-            cerr = ((ym_mask * ym_hat) != c).sum() / ym_mask.sum()
-            self.logger.experiment.add_class_err(cname,
-                                                 cerr,
-                                                 on_step=False,
-                                                 on_epoch=False,
-                                                 logger=True)
-
-        for ymi, ymhi, di in zip(ym, ym_hat, detail):
-            if ymi != ymhi:
-                self.logger.experiment.add_detail(di,
-                                                  "B/M",
-                                                  truth=ymi.item(),
-                                                  predict=ymhi.item())
-
-        if yb is None:
-            return
-        err = 1 - self.acc(pb, yb)
-        self.acc.reset()
-        self.log("err/BIRAD/all",
-                 err,
-                 on_step=False,
-                 on_epoch=False,
-                 logger=True)
-
-        # TODO
-        yb_hat = pb.argmax(dim=1)
-        for ymi, ymhi, di in zip(yb, yb_hat, detail):
-            if ymi != ymhi:
-                self.logger.experiment.add_detail(di,
-                                                  "BIRAD",
-                                                  truth=ymi.item(),
-                                                  predict=ymhi.item())
+        for meta, pmi, ymi in zip(detail, pm, ym):
+            self.logger.log_metrics(meta, pm=pmi.tolist(), ym=ymi.item())

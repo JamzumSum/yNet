@@ -13,12 +13,13 @@ from data.plsupport import DPLSet
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
+from common.trainer.testlogger import TestLogger
 
 from .richbar import RichProgressBar
 
 
 class Trainer(pl.Trainer):
-    def __init__(self, misc, paths, flag):
+    def __init__(self, misc, paths, flag, *, logger=None):
         self.misc = misc
         self.paths = paths
         self.name = paths.get("name", "default")
@@ -28,25 +29,28 @@ class Trainer(pl.Trainer):
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
             default_root_dir=checkpoint_callback.dirpath,
-            logger=self._getTensorBoardLogger(),
+            logger=self._getTensorBoardLogger(logger),
             num_sanity_val_steps=0,
             terminate_on_nan=True,
             log_every_n_steps=10,
             **flag
         )
 
-    def _getTensorBoardLogger(self):
+    def _getTensorBoardLogger(self, logger=None):
         log_dir = self.paths.get("log_dir", os.path.join("log", self.name)).format(
             date=date.today().strftime("%m%d")
         )
-        return TensorBoardLogger(
+        return TestLogger(
+            log_dir, self.name, add={}
+        ) if logger == 'test' else TensorBoardLogger(
             log_dir, self.name, log_graph=True, default_hp_metric=False
         )
 
     def _getCheckpointCallback(self):
-        model_dir = self.paths.get(
-            "model_dir", os.path.join("model", self.name)
-        ).format(date=date.today().strftime("%m%d"))
+        model_dir = self.paths.get("model_dir",
+                                   os.path.join("model", self.name)).format(
+                                       date=date.today().strftime("%m%d")
+                                   )
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
             dirpath=model_dir,
@@ -81,7 +85,7 @@ def gpus2device(gpus):
         raise TypeError(gpus)
 
 
-def getTrainComponents(FSM, Net, conf_path):
+def getTrainComponents(FSM, Net, conf_path, logger=None):
     """
     Given the config in all, construct 3 key components for training, 
     which are all initialed with minimal config sections.
@@ -92,16 +96,12 @@ def getTrainComponents(FSM, Net, conf_path):
         LightningDataModule
     """
     conf = getConfig(conf_path)
-    trainer = Trainer(conf.misc, conf.paths, conf.flag)
+    trainer = Trainer(conf.misc, conf.paths, conf.flag, logger=logger)
     device = gpus2device(trainer.gpus)
 
     datamodule = DPLSet(
-        conf.dataloader,
-        conf.datasets,
-        'Ym',
-        (8, 2),
-        conf.misc.get("augment", None),
-        device,
+        conf.dataloader, conf.datasets, 'Ym', (8, 2), conf.misc.get("augment", None),
+        device
     )
     datamodule.prepare_data()
     datamodule.setup()
@@ -126,6 +126,33 @@ def getTrainComponents(FSM, Net, conf_path):
         net.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
 
     net.score_caption = datamodule.score_caption
+    pl.utilities.seed.seed_everything(net.seed)
+
+    return trainer, net, datamodule
+
+
+def getTestComponents(FSM, Net, conf_path):
+    conf = getConfig(conf_path)
+    trainer = Trainer(conf.misc, conf.paths, conf.flag, logger='test')
+    device = gpus2device(trainer.gpus)
+
+    datamodule = DPLSet(conf.dataloader, conf.datasets, 'Ym', device=device)
+    datamodule.prepare_data()
+
+    kwargs = dict(
+        Net=Net,
+        model_conf=conf.model,
+        coeff_conf=conf.coefficients,
+        misc=conf.misc,
+        op_conf=conf.optimizer,
+        sg_conf=conf.scheduler,
+        branch_conf=conf.branch,
+    )
+    net = FSM(**kwargs)
+
+    model_dir = trainer.default_root_dir
+    path = os.path.join(model_dir, "best.pt")
+    net = net.load_from_checkpoint(path, **kwargs)
     pl.utilities.seed.seed_everything(net.seed)
 
     return trainer, net, datamodule

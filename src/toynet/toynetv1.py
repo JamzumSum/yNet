@@ -10,10 +10,12 @@ from itertools import chain
 import torch
 import torch.nn as nn
 from common import freeze
-from common.decorators import CheckpointSupport, NoGrad, autoPropertyClass
+from common.decorators import NoGrad, autoPropertyClass
 from common.layers import MLP
 from common.loss.triplet import WeightedExampleTripletLoss
 from common.support import *
+from data.augment.online import RandomAffine
+from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
 
 from .lossbase import *
@@ -24,17 +26,22 @@ from .ynet import YNet
 class BIRADsYNet(YNet, MultiBranch):
     zdim: int
 
-    def __init__(self,
-                 in_channel,
-                 K,
-                 *args,
-                 zdim=2048,
-                 norm="batchnorm",
-                 **kwargs):
-        YNet.__init__(self, in_channel, *args, **kwargs)
+    def __init__(
+        self,
+        in_channel,
+        K,
+        width=64,
+        ulevel=4,
+        cps: CPS = None,
+        *,
+        zdim=2048,
+        norm="batchnorm",
+        **kwargs
+    ):
+        YNet.__init__(self, in_channel, width, ulevel, cps, **kwargs)
         cc = self.yoc
         self.sigma = nn.Softmax(dim=1)
-        self.proj_mlp = MLP(cc, zdim, [2048, 2048], False, False)  # L3
+        self.proj_mlp = MLP(cc, zdim, [2048, 2048], False, False) # L3
         self.norm_layer = nn.BatchNorm1d(zdim)
         self.mfc = nn.Linear(zdim, 2)
         self.bfc = nn.Linear(zdim, K)
@@ -69,9 +76,8 @@ class BIRADsYNet(YNet, MultiBranch):
 
         for branch, param in paramdic.copy().items():
             if weight_decay[branch]:
-                paramdic[branch + "_no_decay"] = [
-                    i for i in param if id(i) not in need_decay
-                ]
+                paramdic[branch +
+                         "_no_decay"] = [i for i in param if id(i) not in need_decay]
                 paramdic[branch] = [i for i in param if id(i) in need_decay]
             else:
                 paramdic[branch] = param
@@ -91,7 +97,7 @@ class BIRADsYNet(YNet, MultiBranch):
 
         ft = r["ft"]
 
-        ft = self.proj_mlp(ft)  # [N, Z], empirically, Z >= 128
+        ft = self.proj_mlp(ft)     # [N, Z], empirically, Z >= 128
         fi = self.norm_layer(ft)
         r["fi"] = fi
 
@@ -99,8 +105,7 @@ class BIRADsYNet(YNet, MultiBranch):
         lb = self.bfc(fi)  # [N, K]
         r["lm"] = lm
         r["lb"] = lb
-        if logit:
-            return r
+        if logit: return r
 
         Pm = self.sigma(lm)
         Pb = self.sigma(lb)
@@ -119,9 +124,16 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
     cmgr: CSG
     __version__ = (1, 2)
 
-    def __init__(self, cmgr: CSG, in_channel, *args, margin=0.3, **kwargs):
+    def __init__(self, cmgr: CSG, cps: CPS, in_channel, *args, margin=0.3, **kwargs):
         nn.Module.__init__(self)
-        self.ynet = BIRADsYNet(in_channel, *args, **kwargs)
+        self.ynet = BIRADsYNet(in_channel, *args, cps=cps, **kwargs)
+        # online augment
+        aug_conf = kwargs.get('aug_conf', {})
+        self.aug = RandomAffine(
+            aug_conf.get('degrees', 10),
+            aug_conf.get('translate', .2),
+            aug_conf.get('scale', (0.8, 1.1)),
+        )
         # loss bases
         self.triplet = TripletBase(cmgr, margin, False)
         self.ce = CEBase(cmgr, self)
@@ -135,12 +147,21 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         """
         return the result asis and a loss dict.
         """
-        r: dict = self.ynet(X, segment=True, classify=True, logit=True)
-        seg = r["seg"]
+        # batch_weight = meta['augindices']
+        # batch_weight = torch.tensor(batch_weight, dtype=torch.float, device=X.device)
+
+        need_seg = mask is not None
+
+        aX, amask = self.aug(X, mask) if need_seg else self.aug(X), None
+        r: dict = self.ynet(X, segment=need_seg, classify=True, logit=True)
+        r2 = self.ynet(aX, segment=need_seg, classify=True, logit=True)
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
-        # loss.update(self.siamese(X, r["fi"], mask))
-        loss.update(self.segmse(seg, mask))
+
+        # loss.update(self.siamese(X, r['fi'], r2["fi"]))
+        loss.update(self.segmse(r["seg"], mask))
+        if need_seg:
+            loss['seg_aug'] = self.segmse(r2['seg'], amask, value_only=True)
 
         if meta["balanced"]:
             loss.update(self.triplet(r["ft"], Ym))
@@ -165,10 +186,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
             "tb": "b/triplet",
             "seg_aug": 'segment/mse_aug'
         }
-        return {
-            "loss/" + v: loss[k].detach()
-            for k, v in itemdic.items() if k in loss
-        }
+        return {"loss/" + v: loss[k].detach() for k, v in itemdic.items() if k in loss}
 
     @property
     def branches(self):
@@ -179,4 +197,3 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         p = self.siamese.parameters()
         d['M'] += p
         return d
-    

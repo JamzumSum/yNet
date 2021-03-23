@@ -15,17 +15,6 @@ def checkpointed(func, **kwargs):
     return checkpointWrapper
 
 
-class CheckpointSupport:
-    def __init__(self, memory_trade=False):
-        self.memory_trade = memory_trade
-
-    def __call__(self, instance):
-        if not self.memory_trade:
-            return instance
-        instance.forward = checkpointed(instance.forward)
-        return instance
-
-
 def NoGrad(func):
     @wraps(func)
     def nogradwrapper(*args, **kwargs):

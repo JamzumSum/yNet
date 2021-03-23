@@ -2,12 +2,13 @@ import bisect
 from abc import ABC, abstractmethod, abstractstaticmethod
 from functools import wraps
 from random import choice
+from typing import Iterable
 
 import torch
 from common.support import DeviceAwareness
 
 from ..dataset import Distributed, DistributedConcatSet
-from . import elastic, getGaussianFilter, affine
+from . import affine, elastic, getGaussianFilter
 
 first = lambda it: next(iter(it))
 
@@ -53,8 +54,9 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
         self.dataset = dataset
         self.suffix = suffix
         DeviceAwareness.__init__(self, device)
-        assert not all(isinstance(i, dict) for i in dataset.meta.values()
-                       ), "Augment source set must be uniform."
+        assert not all(
+            isinstance(i, dict) for i in dataset.meta.values()
+        ), "Augment source set must be uniform."
 
         self.distrib_title = distrib_title
         Distributed.__init__(self, dataset.statTitle)
@@ -65,13 +67,14 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
             avg = aim_size // self.K(distrib_title)
 
         org_distrib = self.dataset.getDistribution(distrib_title)
-        my_distrib = avg * torch.ones_like(org_distrib,
-                                           dtype=torch.int) - org_distrib
+        my_distrib = avg * torch.ones_like(org_distrib, dtype=torch.int) - org_distrib
 
         if torch.any(my_distrib < 0):
-            print("At least one class has samples more than %d // %d = %d. "
-                  "These classes wont be sampled when augumenting." %
-                  (aim_size, self.K(distrib_title), avg))
+            print(
+                "At least one class has samples more than %d // %d = %d. "
+                "These classes wont be sampled when augumenting." %
+                (aim_size, self.K(distrib_title), avg)
+            )
             my_distrib.clamp_(min=0)
 
         self._distrib = {distrib_title: my_distrib}
@@ -80,8 +83,7 @@ class AugmentSet(VirtualDataset, DeviceAwareness, ABC):
                 continue
             j = dataset.joint(distrib_title, i)
             j = j / j.sum(dim=1, keepdim=True)
-            self._distrib[i] = (my_distrib.unsqueeze(1) *
-                                j).sum(dim=0).round_()
+            self._distrib[i] = (my_distrib.unsqueeze(1) * j).sum(dim=0).round_()
 
         self._indices = [
             dataset.argwhere(lambda d: d == i, distrib_title)
@@ -219,36 +221,38 @@ class ScaleAugmentSet(AugmentSet):
 
 
 def augmentWith(
-        # fmt: off
-        dataset: Distributed,
-        aug_class,
-        distrib_title: str,
-        aim_size: int,
-        device=None,
-        tag=None,
-        *args,
-        **argv
-    # fmt: on
+    cls,
+    dataset: Distributed,
+    distrib_title: str,
+    aim_size: int,
+    device=None,
+    tag=None,
+    *args,
+    **argv
 ):
     meta = dataset.meta
     if not all(isinstance(i, dict) for i in meta.values()):
         if tag:
             tag = str(tag)
-        augset = aug_class(dataset,
-                           distrib_title,
-                           aim_size,
-                           *args,
-                           **argv,
-                           device=device)
+        augset = cls(dataset, distrib_title, aim_size, *args, **argv, device=device)
         return DistributedConcatSet(
             [dataset, augset],
             tag=[tag, tag + "_aug"] if tag else None,
         )
 
-    # TODO: How to estimate?
-    estim_size = lambda D: round(len(D) / len(dataset) * aim_size)
+    if isinstance(aim_size, int):
+        aim_size = [round(len(D) / len(dataset) * aim_size) for D in dataset.datasets]
+    elif isinstance(aim_size, float):
+        aim_size = [round((1 + aim_size) * len(D)) for D in dataset.datasets]
+    elif isinstance(aim_size, Iterable):
+        aim_size = tuple(aim_size)
+    else:
+        raise TypeError(type(aim_size))
+
     return DistributedConcatSet(
-        (augmentWith(D, aug_class, distrib_title, estim_size(D), device, tag, *
-                     args, **argv) for tag, D in dataset.taged_datasets),
+        (
+            augmentWith(cls, D, distrib_title, size, device, tag, *args, **argv)
+            for size, (tag, D) in zip(aim_size, dataset.taged_datasets) if size > 0
+        ),
         tag=[str(i) + "&aug" for i in dataset.tag],
     )

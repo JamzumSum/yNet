@@ -91,6 +91,6 @@ def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     TP = torch.sum(gt_flat * pflat, dim=1)
     FP = torch.sum(pflat, dim=1) - TP
     FN = torch.sum(gt_flat, dim=1) - TP
-    dice = (2 * TP + eps) / (2 * TP + FP + FN + eps)
+    dice = (2 * TP).clamp(min=eps) / (2 * TP + FP + FN).clamp(min=eps)
     
     return _reduct(dice, reduction)

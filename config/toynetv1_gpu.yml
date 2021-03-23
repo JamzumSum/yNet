@@ -12,18 +12,15 @@ model:
   # margin when calculating triplet loss
   margin: 0.3
 
-  # use torch checkpoint to save memory on training
-  memory_trade: True
-
 # coefficients when calculating multi-task loss
 coefficients:
   task:
     tm: 0.5 * x ** 4
 
 datasets:
-  - set2
-  - set3
-  - BUSI
+  set2: 240
+  set3: 340
+  BUSI: 880
 
 # trainer flag
 flag:
@@ -32,12 +29,16 @@ flag:
   max_epochs: 120
 
 misc:
-  augment: 1200
+  # resume training or not
   continue: False
   load_from: latest
+
   lr_warmup:
     interval: epoch
     times: 10
+
+  # use torch checkpoint to save memory on training
+  memory_trade: True
 
 optimizer:
   - AdamW

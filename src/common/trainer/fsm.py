@@ -6,7 +6,7 @@ from datetime import date
 
 import pytorch_lightning as pl
 import torch
-from misc import CoefficientScheduler
+from misc import CoefficientScheduler, CheckpointSupport
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
@@ -37,7 +37,11 @@ class FSMBase(pl.LightningModule, ABC):
             self.op_cls = getattr(torch.optim, op_conf[0])
             self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
 
-        self.net = Net(cmgr=self.cosg, **model_conf)
+        self.net = Net(
+            cmgr=self.cosg,
+            cps=CheckpointSupport(misc.get('memory_trade', False)),
+            **model_conf
+        )
 
     def save_hyperparameters(self, **otherconf):
         conf = {

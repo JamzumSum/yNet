@@ -8,6 +8,15 @@ class DataMeta:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+    def __repr__(self):
+        r = self.pid
+        if self.augmented: return r + '.aug'
+        else: return r
+
+    @property
+    def augmented(self):
+        return hasattr(self, 'aug')
+
 
 class CachedDataset(Distributed):
     def __init__(self, loader, content: dict, meta):
@@ -17,7 +26,7 @@ class CachedDataset(Distributed):
         # Otherwise meta should have multiple items. So `distribution` must be popped up here.
         self.distrib = meta.pop("distribution")
         self.loader = loader
-        
+
         meta["shape"] = loader.load(first(content["X"])).shape
         meta["batchflag"] = hash(
             (meta["shape"], "Yb" in self.titles, "mask" in self.titles)
@@ -75,7 +84,6 @@ class CachedDatasetGroup(DistributedConcatSet):
     """
     Dataset for a group of cached datasets.
     """
-
     def __init__(self, path, device=None, withpid=False):
         d: dict = torch.load(os.path.join(path, "meta.pt"))
         shapedic: dict = d.pop("data")
@@ -83,6 +91,7 @@ class CachedDatasetGroup(DistributedConcatSet):
         # group hold the loader entity
         self.loader = IndexLoader(os.path.join(path, "images.pts"), index, device)
 
-        datasets = [CachedDataset(self.loader, dic, d.copy()) for dic in shapedic.values()]
+        datasets = [
+            CachedDataset(self.loader, dic, d.copy()) for dic in shapedic.values()
+        ]
         DistributedConcatSet.__init__(self, datasets, tag=shapedic.keys())
-

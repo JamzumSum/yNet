@@ -120,8 +120,10 @@ def fixCollate(x):
     2. add a meta of the batch.
     """
     hashstat = defaultdict(list)
+    metas = []
     for i in x:
-        hashstat[i.pop("meta").batchflag].append(i)
+        metas.append(i.pop("meta"))
+        hashstat[metas[-1].batchflag].append(i)
     bf, x = max(hashstat.items(), key=lambda t: len(t[1]))
 
     x = deep_collate(x, True, ["meta"])
@@ -130,7 +132,7 @@ def fixCollate(x):
     x["meta"] = {
         "batchflag": bf,
         'balanced': True,
-        'augindices': None  # TODO
+        'augindices': tuple(i.augmented for i in metas)
     }
     return x
 

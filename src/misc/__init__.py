@@ -1,5 +1,6 @@
 from omegaconf import OmegaConf, DictConfig
 from functools import partial
+from common.decorators import checkpointed
 
 
 class CoefficientScheduler:
@@ -48,3 +49,14 @@ class CoefficientScheduler:
             return super().__getattribute__(name)
         except AttributeError:
             return self._var[name]
+
+
+class CheckpointSupport:
+    def __init__(self, memory_trade=False):
+        self.memory_trade = memory_trade
+
+    def __call__(self, instance):
+        if not self.memory_trade:
+            return instance
+        instance.forward = checkpointed(instance.forward)
+        return instance
