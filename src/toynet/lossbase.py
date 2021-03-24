@@ -12,7 +12,6 @@ from itertools import chain
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.decorators import autoPropertyClass
 from common.layers import MLP
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import WeightedExampleTripletLoss
@@ -31,6 +30,7 @@ class LossBase(ABC):
         if value_only:
             assert len(d) == 1
             return first(d.values())
+        return d
 
     @abstractmethod
     def __loss__(self, *args, **kwargs) -> dict:

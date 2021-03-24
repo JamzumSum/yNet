@@ -8,7 +8,7 @@ A torch implement for U-Net.
 """
 import torch
 import torch.nn as nn
-from common.decorators import autoPropertyClass
+from misc.decorators import autoPropertyClass
 from common.support import SelfInitialed
 from misc import CheckpointSupport
 

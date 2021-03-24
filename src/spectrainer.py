@@ -4,9 +4,6 @@ A trainer for toynets.
 * author: JamzumSum
 * create: 2021-1-13
 """
-from itertools import chain
-from warnings import warn
-
 import torch
 import torch.nn.functional as F
 
@@ -16,6 +13,7 @@ from common.optimizer import ReduceLROnPlateau, get_arg_default, no_decay
 from common.support import *
 from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
 from common.utils import gray2JET
+from misc.decorators import noexcept
 from misc.updatedict import shallow_update
 
 plateau_lr_dic = lambda sg, monitor: {
@@ -121,12 +119,11 @@ class ToyNetTrainer(FSMBase):
 
         return ops, sgs
 
-    # fmt: off
+    @noexcept
     def optimizer_step(
         self, current_epoch, batch_nb, optimizer, optimizer_idx, closure, *args,
         **kwargs
     ):
-        # fmt: on
         # warm up lr
         warmup_conf: dict = self.misc.get('lr_warmup', {})
         if warmup_conf is None:

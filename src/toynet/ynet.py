@@ -5,30 +5,27 @@ The additional path is used of embedding learning.
 * author: JamzumSum
 * create: 2021-3-15
 """
-from itertools import chain
-
 import torch.nn as nn
-from common.decorators import autoPropertyClass
 from common.support import SegmentSupported, SelfInitialed
 from misc import CheckpointSupport
 
-from .unet import ChannelNorm, ConvStack2, DownConv, UNet
+from .unet import ConvStack2, DownConv, UNet
 
 
 class YNet(nn.Module, SegmentSupported, SelfInitialed):
     r"""
     Generate embedding and segment of an image.
-    YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], D = fc * 2^(ul+yl)
+    YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
+    D = fc * 2^(ul+yl)
     """
     def __init__(
         self,
+        cps: CheckpointSupport,
         in_channel,
         width=64,
         ulevel=4,
-        cps: CheckpointSupport = None,
         *,
         ylevels: list = None,
-        memory_trade=False,
         residual=True,
         zero_init_residual=True,
         norm="batchnorm",
@@ -44,7 +41,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
             in_channel,
             1,
             ulevel,
-            width,                             # fmt: skip
+            width,
             cps=cps,
             residual=residual,
             norm=norm,
@@ -71,8 +68,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
     def selfInit(self, zero_init_residual=False):
         for m in self.modules():
             if isinstance(m, SelfInitialed):
-                if m is self:
-                    continue
+                if m is self: continue
                 m.selfInit()
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -85,28 +81,22 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
                     nn.init.constant_(m.CB[1].weight, 0)
 
     def forward(self, X, segment=True, classify=True) -> dict:
-        r"""
-        args: 
-            X: [N, ic, H, W]
-            mask: optional [N, 1, H, W]
-        flag:
-            segment: if true, the whole unet will be inferenced to generate a segment map.
-            classify: if true, the ypath is inferenced to get classification result.
-            logit: skip softmax for some losses that needn't that.
-        return: 
-            segment map  [N, 2, H, W]. return this alone if `segment but not classify`
-            x: bottom of unet feature. [N, fc * 2^ul]
-            Pm        [N, 2]
-            Pb        [N, K]
+        """[summary]
+
+        Args:
+            X (Tensor): [N, ic, H, W]
+            segment (bool, optional): if true, the whole unet will be inferenced to generate a segment map.
+            classify (bool, optional): if true, the ypath is inferenced to get classification result. 
+
+        Returns:
+            dict: [description]
         """
         assert segment or classify, "hello?"
         d = self.unet(X, segment)
 
         r = {}
-        # fmt: off
         if segment: r['seg'] = d['seg0']
         if not classify: return r
-        # fmt: on
 
         c = d["bottom"]
         if self.ylevel:

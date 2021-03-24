@@ -10,41 +10,36 @@ from itertools import chain
 import torch
 import torch.nn as nn
 from common import freeze
-from common.decorators import NoGrad, autoPropertyClass
-from common.layers import MLP
-from common.loss.triplet import WeightedExampleTripletLoss
+from common.decorators import NoGrad
 from common.support import *
 from data.augment.online import RandomAffine
 from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
+from misc.decorators import autoPropertyClass, noexcept
 
 from .lossbase import *
 from .ynet import YNet
 
+first = lambda it: next(iter(it))
 
-@autoPropertyClass
+
 class BIRADsYNet(YNet, MultiBranch):
-    zdim: int
-
     def __init__(
         self,
+        cps: CPS,
         in_channel,
         K,
         width=64,
         ulevel=4,
-        cps: CPS = None,
         *,
-        zdim=2048,
         norm="batchnorm",
         **kwargs
     ):
-        YNet.__init__(self, in_channel, width, ulevel, cps, **kwargs)
-        cc = self.yoc
+        YNet.__init__(self, cps, in_channel, width, ulevel, **kwargs)
         self.sigma = nn.Softmax(dim=1)
-        self.proj_mlp = MLP(cc, zdim, [2048, 2048], False, False) # L3
-        self.norm_layer = nn.BatchNorm1d(zdim)
-        self.mfc = nn.Linear(zdim, 2)
-        self.bfc = nn.Linear(zdim, K)
+        self.norm_layer = nn.BatchNorm1d(self.yoc)
+        self.mfc = nn.Linear(self.yoc, 2)
+        self.bfc = nn.Linear(self.yoc, K)
 
     def branch_weight(self, weight_decay: dict):
         """
@@ -97,8 +92,7 @@ class BIRADsYNet(YNet, MultiBranch):
 
         ft = r["ft"]
 
-        ft = self.proj_mlp(ft)     # [N, Z], empirically, Z >= 128
-        fi = self.norm_layer(ft)
+        fi = self.norm_layer(ft)   # [N, Z], empirically, Z >= 128
         r["fi"] = fi
 
         lm = self.mfc(fi)  # [N, 2]
@@ -126,7 +120,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
     def __init__(self, cmgr: CSG, cps: CPS, in_channel, *args, margin=0.3, **kwargs):
         nn.Module.__init__(self)
-        self.ynet = BIRADsYNet(in_channel, *args, cps=cps, **kwargs)
+        self.ynet = BIRADsYNet(cps, in_channel, *args, **kwargs)
         # online augment
         aug_conf = kwargs.get('aug_conf', {})
         self.aug = RandomAffine(
@@ -138,45 +132,86 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         self.triplet = TripletBase(cmgr, margin, False)
         self.ce = CEBase(cmgr, self)
         self.segmse = MSESegBase(cmgr)
-        self.siamese = SiameseBase(cmgr, self, self.ynet.zdim, self.segmse)
+        self.siamese = SiameseBase(cmgr, self, self.ynet.yoc, self.segmse)
 
+    @noexcept
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)
 
-    def loss(self, meta: dict, X, Ym, Yb=None, mask=None):
-        """
-        return the result asis and a loss dict.
-        """
-        # batch_weight = meta['augindices']
-        # batch_weight = torch.tensor(batch_weight, dtype=torch.float, device=X.device)
+    @noexcept
+    def loss(self, meta: dict, X, Ym, Yb=None, mask=None) -> tuple:
+        """return the result asis and a loss dict.
 
+        Args:
+            meta (dict): batch meta
+            X (Tensor): [description]
+            Ym (Tensor): [description]
+            Yb (Tensor, optional): [description]. Defaults to None.
+            mask (Tensor, optional): [description]. Defaults to None.
+
+        Returns:
+            tuple: [description]
+        """
         need_seg = mask is not None
 
-        aX, amask = self.aug(X, mask) if need_seg else self.aug(X), None
+        aX, amask = self.aug(X, mask) if need_seg else (self.aug(X), None)
         r: dict = self.ynet(X, segment=need_seg, classify=True, logit=True)
         r2 = self.ynet(aX, segment=need_seg, classify=True, logit=True)
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
 
-        # loss.update(self.siamese(X, r['fi'], r2["fi"]))
-        loss.update(self.segmse(r["seg"], mask))
+        # loss |= self.siamese(X, r['fi'], r2["fi"])
         if need_seg:
+            loss |= self.segmse(r["seg"], mask)
             loss['seg_aug'] = self.segmse(r2['seg'], amask, value_only=True)
 
         if meta["balanced"]:
-            loss.update(self.triplet(r["ft"], Ym))
+            loss |= self.triplet(r["ft"], Ym)
             # TODO: triplet of BIRADs
 
-        return r, loss
+        return r, self.reduceLoss(loss, meta['augindices'])
+
+    def reduceLoss(self, loss: dict, aug_indices, w: float = 1 / 3) -> dict:
+        """[summary]
+
+        Args:
+            loss (dict): [description]
+            aug_indices (Tensor): [description]
+            w (float, optional): [description]. Defaults to 1/3.
+
+        Returns:
+            dict: [description]
+        """
+        device = first(loss.values()).device
+        aug_mask = torch.tensor(aug_indices, dtype=torch.float, device=device)
+        batch_weight = 1 - (1 - w) * aug_mask
+        # TODO
+        return {k: (batch_weight * v).sum() for k, v in loss.items()}
 
     def multiTaskLoss(self, loss: dict):
+        """[summary]
+
+        Args:
+            loss (dict): [description]
+
+        Returns:
+            Tensor: [description]
+        """
         cum_loss = 0
         for k, v in loss.items():
             cum_loss = cum_loss + v * self.cmgr.get("task." + k, 1)
         return cum_loss
 
     @staticmethod
-    def lossSummary(loss: dict):
+    def lossSummary(loss: dict) -> dict:
+        """[summary]
+
+        Args:
+            loss (dict): [description]
+
+        Returns:
+            dict: [description]
+        """
         itemdic = {
             "pm": "m/CE",
             "tm": "m/triplet",

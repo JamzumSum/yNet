@@ -3,7 +3,6 @@ from typing import Iterable
 import torch
 import torch.nn.functional as F
 from common.decorators import d3support
-from common.decorators import autoPropertyClass
 from . import affine
 
 

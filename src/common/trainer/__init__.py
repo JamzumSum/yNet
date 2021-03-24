@@ -9,11 +9,11 @@ from datetime import date
 
 import pytorch_lightning as pl
 import torch
-from data.plsupport import DPLSet
-from omegaconf import DictConfig, OmegaConf, ListConfig
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
 from common.trainer.testlogger import TestLogger
+from data.plsupport import DPLSet
+from omegaconf import DictConfig, ListConfig, OmegaConf
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from .richbar import RichProgressBar
 

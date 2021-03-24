@@ -1,6 +1,5 @@
-from omegaconf import OmegaConf, DictConfig
-from functools import partial
 from common.decorators import checkpointed
+from omegaconf import DictConfig, OmegaConf
 
 
 class CoefficientScheduler:
