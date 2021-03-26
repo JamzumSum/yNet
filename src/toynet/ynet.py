@@ -13,10 +13,20 @@ from .unet import ConvStack2, DownConv, UNet
 
 
 class YNet(nn.Module, SegmentSupported, SelfInitialed):
-    r"""
-    Generate embedding and segment of an image.
+    """Generate embedding and segment of an image.
     YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
     D = fc * 2^(ul+yl)
+
+    Args:
+        cps (CheckpointSupport)
+        in_channel (int): input channel
+        width (int, optional): [description]. Defaults to 64.
+        ulevel (int, optional): unet level. Defaults to 4.
+        ylevels (list, optional): [description]. Defaults to None.
+        residual (bool, optional): use res-block as base unit. Defaults to True.
+        zero_init_residual (bool, optional): init residual path as 0. Defaults to True.
+        norm (str, optional): [description]. Defaults to "batchnorm".
+        multiscale (bool, int, optional): atrous layer num. Defaults to False(0).
     """
     def __init__(
         self,

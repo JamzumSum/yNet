@@ -7,7 +7,6 @@ But the bases are not module.
 * create: 2021-3-15
 """
 from abc import ABC, abstractmethod
-from itertools import chain
 
 import torch
 import torch.nn as nn
@@ -38,20 +37,30 @@ class LossBase(ABC):
 
 
 class SiameseBase(LossBase):
-    def __init__(self, cmgr, holder, zdim: int, msebase=None, **aug_conf):
+    
+    def __init__(self, cmgr, holder, zdim: int):
         super().__init__(cmgr)
         self.p = holder
-        self.mse = msebase or MSESegBase(cmgr)
         holder.pred_mlp = MLP(zdim, zdim, [512], False, False) # L2
 
     @staticmethod
     def neg_cos_sim(p, z):
+        # type: (Tensor, Tensor) -> Tensor
         z = z.detach()     # stop-grad
         p = F.normalize(p, dim=1)
         z = F.normalize(z, dim=1)
-        return -(p * z).sum(dim=1).mean()
+        return -(p * z).sum(dim=1)
 
-    def __loss__(self, X, fi, fi2):
+    def __loss__(self, fi, fi2):
+        """calculate negative cosine similarity of two feature.
+
+        Args:
+            fi (Tensor[float]): [description]
+            fi2 (Tensor[float]): [description]
+
+        Returns:
+            Tensor[float]: [description]
+        """
         # negative cosine similarity with pred_mlp.
         # D is to be used as a symmetrized loss.
         D = lambda p, z: self.neg_cos_sim(self.p.pred_mlp(p), z)
@@ -65,7 +74,7 @@ class TripletBase(LossBase):
     def __init__(self, cmgr, margin=0.3, normalize=True):
         super().__init__(cmgr)
         self.enable = margin > 0
-        self.triplet = WeightedExampleTripletLoss(margin, normalize)
+        self.triplet = WeightedExampleTripletLoss(margin, normalize, 'none')
 
     def __loss__(self, ft, Ym):
         return {"tm": self.triplet.forward(ft, Ym)} if self.enable else {}
@@ -80,14 +89,25 @@ class CEBase(LossBase):
         self.p = holder
 
     def __loss__(self, lm, lb, ym, yb=None):
-        d = {"pm": F.cross_entropy(lm, ym, weight=self.p.mweight)}
+        d = {"pm": F.cross_entropy(lm, ym, weight=self.p.mweight, reduction='none')}
         if yb is not None:
             gamma_b = self.cmgr.get("gamma_b", self.cmgr.piter + 1)
-            d["pb"] = focal_smooth_bce(lb, yb, gamma=gamma_b, weight=self.p.bweight)
+            d["pb"] = focal_smooth_bce(
+                lb, yb, gamma=gamma_b, weight=self.p.bweight, reduction='none'
+            )
         return d
 
 
 class MSESegBase(LossBase):
+    """[summary]
+
+        Args:
+            seg (Tensor[float], optional): [description]. Defaults to None.
+            mask (Tensor[float], optional): [description]. Defaults to None.
+
+        Returns:
+            Tensor: [description]
+        """
     def __init__(self, cmgr):
         super().__init__(cmgr)
 
@@ -95,4 +115,5 @@ class MSESegBase(LossBase):
         if mask is None or seg is None:
             return {}
         weight_focus_pos = self.cmgr.get("weight_focus_pos", 1 - self.cmgr.piter ** 2)
-        return {"seg": ((seg - mask) ** 2 * (weight_focus_pos * mask + 1)).mean()}
+        weight = weight_focus_pos * mask + 1
+        return {"seg": ((seg - mask) ** 2 * weight).mean(dim=(1, 2, 3))}

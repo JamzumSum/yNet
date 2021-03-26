@@ -18,9 +18,9 @@ coefficients:
     tm: 0.5 * x ** 4
 
 datasets:
+  BUSI: 880
   set2: 240
   set3: 340
-  BUSI: 880
 
 # trainer flag
 flag:

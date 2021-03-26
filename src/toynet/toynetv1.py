@@ -35,7 +35,7 @@ class BIRADsYNet(YNet, MultiBranch):
         norm="batchnorm",
         **kwargs
     ):
-        YNet.__init__(self, cps, in_channel, width, ulevel, **kwargs)
+        YNet.__init__(self, cps, in_channel, width, ulevel, norm=norm, **kwargs)
         self.sigma = nn.Softmax(dim=1)
         self.norm_layer = nn.BatchNorm1d(self.yoc)
         self.mfc = nn.Linear(self.yoc, 2)
@@ -120,6 +120,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
     def __init__(self, cmgr: CSG, cps: CPS, in_channel, *args, margin=0.3, **kwargs):
         nn.Module.__init__(self)
+        self.cps = cps
         self.ynet = BIRADsYNet(cps, in_channel, *args, **kwargs)
         # online augment
         aug_conf = kwargs.get('aug_conf', {})
@@ -132,7 +133,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         self.triplet = TripletBase(cmgr, margin, False)
         self.ce = CEBase(cmgr, self)
         self.segmse = MSESegBase(cmgr)
-        self.siamese = SiameseBase(cmgr, self, self.ynet.yoc, self.segmse)
+        self.siamese = SiameseBase(cmgr, self, self.ynet.yoc)
 
     @noexcept
     def forward(self, *args, **kwargs):
@@ -160,7 +161,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
 
-        # loss |= self.siamese(X, r['fi'], r2["fi"])
+        # loss |= self.siamese(r['fi'], r2["fi"])
         if need_seg:
             loss |= self.segmse(r["seg"], mask)
             loss['seg_aug'] = self.segmse(r2['seg'], amask, value_only=True)
@@ -171,8 +172,8 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
         return r, self.reduceLoss(loss, meta['augindices'])
 
-    def reduceLoss(self, loss: dict, aug_indices, w: float = 1 / 3) -> dict:
-        """[summary]
+    def reduceLoss(self, loss: dict, aug_indices: list, w: float = 1 / 3) -> dict:
+        """reduce batch-wise loss to a loss item according to data-wise weight of a batch.
 
         Args:
             loss (dict): [description]
@@ -184,7 +185,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
         """
         device = first(loss.values()).device
         aug_mask = torch.tensor(aug_indices, dtype=torch.float, device=device)
-        batch_weight = 1 - (1 - w) * aug_mask
+        batch_weight = (1 - (1 - w) * aug_mask) / len(aug_indices)
         # TODO
         return {k: (batch_weight * v).sum() for k, v in loss.items()}
 

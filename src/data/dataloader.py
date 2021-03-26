@@ -107,7 +107,7 @@ class DistributedSampler(BatchSampler, DeviceAwareness):
                 x = self.dataset[i]
             hd = tdic[x["meta"].batchflag]
             hd[x[self.distrib_title]].append(i)
-            if all(len(stack) > self.batchsize_k for stack in hd):
+            if all(len(stack) >= self.batchsize_k for stack in hd):
                 yield self.makebatch(hd)
 
     def __len__(self):
