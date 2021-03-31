@@ -57,7 +57,6 @@ class MultiScale(ChannelInference, nn.Sequential):
 
     NOTE: There should be a conv before this layer according to oridinal implementation.
     """
-
     def __init__(self, ic, oc, fc=None, atrous_num=1, bias=True):
         if atrous_num:
             if fc is None:
@@ -83,11 +82,8 @@ class MultiScale(ChannelInference, nn.Sequential):
     @staticmethod
     def _auto_fc(oc, atrous_num):
         return (
-            oc // (atrous_num + 1)
-            if oc % (atrous_num + 1) == 0
-            else oc // 2
-            if oc & 1 == 0
-            else oc
+            oc // (atrous_num + 1) if oc % (atrous_num + 1) == 0 else oc // 2 if oc
+            & 1 == 0 else oc
         )
 
 
@@ -107,16 +103,18 @@ class ConvStack2(ChannelInference):
         bias = norm == "none"
 
         self.CBR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1, bias=bias), norm_layer(norm)(oc), nonlinear(),
+            nn.Conv2d(ic, oc, 3, 1, 1, bias=bias),
+            norm_layer(norm)(oc),
+            nonlinear(),
         )
         self.CB = nn.Sequential(
-            MultiScale(oc, oc, None, atrous_num, bias), norm_layer(norm)(oc)
+            MultiScale(oc, oc, None, atrous_num, bias),
+            norm_layer(norm)(oc)
         )
         if res:
             self.downsample = (
-                nn.Sequential(nn.Conv2d(ic, oc, 1, bias=bias), norm_layer(norm)(oc))
-                if ic != oc
-                else nn.Identity()
+                nn.Sequential(nn.Conv2d(ic, oc, 1, bias=bias),
+                              norm_layer(norm)(oc)) if ic != oc else nn.Identity()
             )
 
     def forward(self, X):
@@ -132,7 +130,6 @@ class DownConv(ChannelInference):
     """
     [N, C, H, W] -> [N, C, H//2, W//2]
     """
-
     def __init__(self, ic, mode="maxpool"):
         """
         mode: pooling method.
@@ -161,7 +158,6 @@ class UpConv(ChannelInference, nn.Sequential):
     """
     [N, C, H, W] -> [N, C//2, H*2, W*2]
     """
-
     def __init__(self, ic, norm="batchnorm", transConv=False):
         ChannelInference.__init__(self, ic, ic // 2)
         bias = norm == "none"
@@ -171,9 +167,9 @@ class UpConv(ChannelInference, nn.Sequential):
         else:
             layers = [
                 nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-                # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
-                # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
-                # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
+                                                                                  # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
+                                                                                  # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
+                                                                                  # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
                 nn.Conv2d(ic, ic // 2, 1, bias=bias),
             ]
         layers.append(norm_layer(norm)(self.oc))
@@ -194,15 +190,20 @@ class UNetWOHeader(ChannelInference):
     cps: CheckpointSupport
 
     def __init__(
-        # fmt: off
-        self, ic, level=4, fc=64, *, 
-        cps=None, residual=False, norm='batchnorm', 
-        multiscale=False, transConv=False
-        # fmt: on
+        self,
+        ic,
+        level=4,
+        fc=64,
+        *,
+        cps=None,
+        residual=False,
+        norm='batchnorm',
+        multiscale=False,
+        transConv=False
     ):
         super().__init__(ic, fc * 2 ** level)
-        self.add_module("L1", ConvStack2(ic, fc, res=residual))
-        cc = self._L(1).oc
+        self.L1 = ConvStack2(ic, fc, res=residual)
+        cc = self.L1.oc
 
         for i in range(level):
             dsample = DownConv(cc, "conv")
@@ -231,11 +232,14 @@ class UNetWOHeader(ChannelInference):
 
     @staticmethod
     def _padCat(X, Y):
-        """
-        Pad Y and concat with X.
-        X: [N, C, H_max, W_max]
-        Y: [N, C, H_min, W_min]
-        -> [N, C, H_max, W_max]
+        """Pad Y and concat with X.
+
+        Args:
+            X (Tensor): [N, C, H_max, W_max]
+            Y (Tensor): [N, C, H_min, W_min]
+
+        Returns:
+            Tensor: [N, C, H_max, W_max]
         """
         # hmax, wmax = X.shape[-2:]
         # hmin, wmin = Y.shape[-2:]
@@ -260,15 +264,12 @@ class UNetWOHeader(ChannelInference):
         X: [N, C, H, W]
         O: [N, fc, H, W], [N, oc, H, W]
         """
-        if self.cps.memory_trade:
-            X = X.clone().requires_grad_()
-
         xn = [self.L1(X)]
 
         for i in range(1, self.level + 1):
             xn.append(
                 self._L(i + 1)(self._D(i)(xn[-1]))
-            )  # [N, t * fc, H//t, W//t], t = 2^i
+            )                                      # [N, t * fc, H//t, W//t], t = 2^i
 
         if not expand:
             return xn[self.level], None
@@ -276,10 +277,10 @@ class UNetWOHeader(ChannelInference):
         for i in range(self.level):
             xn.append(
                 self._L(self.level + i + 2)(
-                    # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
                     self._padCat(
-                        xn[self.level - i - 1], self._U(i + 1)(xn[self.level + i])
-                    )
+                        xn[self.level - i - 1],
+                        self._U(i + 1)(xn[self.level + i])
+                    )                                      # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
                 )
             )
 

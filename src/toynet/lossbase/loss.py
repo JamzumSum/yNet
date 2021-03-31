@@ -16,28 +16,29 @@ from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import WeightedExampleTripletLoss
 from misc import CoefficientScheduler as CSG
 
-__all__ = ["LossBase", "SiameseBase", "TripletBase", "CEBase", "MSESegBase"]
-first = lambda it: next(iter(it))
+__all__ = ["SiameseBase", "TripletBase", "CEBase", "MSESegBase", "IdentityBase"]
 
 
 class LossBase(ABC):
     def __init__(self, cmgr: CSG):
         self.cmgr = cmgr
 
-    def __call__(self, *args, value_only=False, **kwargs):
-        d = self.__loss__(*args, **kwargs)
-        if value_only:
-            assert len(d) == 1
-            return first(d.values())
-        return d
-
-    @abstractmethod
     def __loss__(self, *args, **kwargs) -> dict:
         pass
 
+    def __call__(self, *args, **kwargs) -> dict:
+        return self.__loss__(*args, **kwargs)
+
+
+class IdentityBase(LossBase):
+    def __init__(self, cmgr: CSG, *args, **kwargs):
+        super().__init__(cmgr)
+
+    def __loss__(self, *args, **kwargs) -> dict:
+        return {}
+
 
 class SiameseBase(LossBase):
-    
     def __init__(self, cmgr, holder, zdim: int):
         super().__init__(cmgr)
         self.p = holder
@@ -55,28 +56,27 @@ class SiameseBase(LossBase):
         """calculate negative cosine similarity of two feature.
 
         Args:
-            fi (Tensor[float]): [description]
-            fi2 (Tensor[float]): [description]
+            fi (Tensor[float]): embedding 1
+            fi2 (Tensor[float]): embedding 2
 
         Returns:
-            Tensor[float]: [description]
+            Tensor[float]: symmetrized negative cosine similarity
         """
         # negative cosine similarity with pred_mlp.
         # D is to be used as a symmetrized loss.
         D = lambda p, z: self.neg_cos_sim(self.p.pred_mlp(p), z)
         return {"sim": (D(fi, fi2) + D(fi2, fi)) / 2}
 
-    def parameters(self):
-        return self.p.pred_mlp.parameters()
-
 
 class TripletBase(LossBase):
-    def __init__(self, cmgr, margin=0.3, normalize=True):
+    def __init__(self, cmgr, normalize=True):
         super().__init__(cmgr)
-        self.enable = margin > 0
+        margin = self.cmgr.get('margin', 0.3)
+        self.enable = margin == 0 and self.cmgr.isConstant('margin')
         self.triplet = WeightedExampleTripletLoss(margin, normalize, 'none')
 
     def __loss__(self, ft, Ym):
+        self.triplet.margin = self.cmgr.get('margin', self.triplet.margin)
         return {"tm": self.triplet.forward(ft, Ym)} if self.enable else {}
 
 
@@ -93,7 +93,7 @@ class CEBase(LossBase):
         if yb is not None:
             gamma_b = self.cmgr.get("gamma_b", self.cmgr.piter + 1)
             d["pb"] = focal_smooth_bce(
-                lb, yb, gamma=gamma_b, weight=self.p.bweight, reduction='none'
+                lb.detach(), yb, gamma=gamma_b, weight=self.p.bweight, reduction='none'
             )
         return d
 

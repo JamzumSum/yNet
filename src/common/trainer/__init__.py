@@ -113,7 +113,7 @@ def getTrainComponents(FSM, Net, conf_path, logger=None):
         misc=conf.misc,
         op_conf=conf.optimizer,
         sg_conf=conf.scheduler,
-        branch_conf=conf.branch,
+        branch_conf=conf.get('branch', {}),
     )
     net = FSM(**kwargs)
 

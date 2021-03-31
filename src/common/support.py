@@ -1,9 +1,9 @@
-from abc import ABC, abstractclassmethod, abstractproperty
+from abc import ABC, abstractmethod, abstractproperty
 import torch
 
 
 class SelfInitialed(ABC):
-    @abstractclassmethod
+    @abstractmethod
     def selfInit(self):
         pass
 
@@ -17,13 +17,13 @@ class SegmentSupported(ABC):
 
 
 class HasDiscriminator(ABC):
-    @abstractclassmethod
+    @abstractmethod
     def discrim_weight(self, weight_decay):
         pass
 
 
 class MultiBranch(ABC):
-    @abstractclassmethod
+    @abstractmethod
     def branch_weight(self, weight_decay: dict):
         pass
 

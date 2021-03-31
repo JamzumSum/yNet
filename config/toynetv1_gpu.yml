@@ -9,13 +9,22 @@ model:
   # ypath like res18: [2, 2, 2]
   ylevels: [2, 2]
 
-  # margin when calculating triplet loss
-  margin: 0.3
+  # random affine ranges for siamese. 
+  aug_conf:
+    degrees: 0
+    translate: .2
+    scale: [0.9, 1.1]
 
 # coefficients when calculating multi-task loss
 coefficients:
+  # margin when calculating triplet loss
+  margin: 0.3
+
+  # multi-task factors
   task:
     tm: 0.5 * x ** 4
+    seg: 0.5
+    seg_aug: x / 6
 
 datasets:
   BUSI: 880

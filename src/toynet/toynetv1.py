@@ -4,23 +4,23 @@ A toy implement for classifying benign/malignant and BIRADs
 * author: JamzumSum
 * create: 2021-1-11
 """
-from collections import defaultdict
-from itertools import chain
-
 import torch
 import torch.nn as nn
 from common import freeze
 from common.decorators import NoGrad
+from common.optimizer import get_need_decay, split_upto_decay
 from common.support import *
 from data.augment.online import RandomAffine
 from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
-from misc.decorators import autoPropertyClass, noexcept
+from misc.decorators import autoPropertyClass
 
-from .lossbase import *
+from .lossbase import MultiTask
+from .lossbase.loss import *
 from .ynet import YNet
 
 first = lambda it: next(iter(it))
+value_only = lambda d: first(d.values())
 
 
 class BIRADsYNet(YNet, MultiBranch):
@@ -51,32 +51,14 @@ class BIRADsYNet(YNet, MultiBranch):
                 'B': True
             }
         """
-        paramAll = self.parameters()
         paramB = list(self.bfc.parameters())
-        paramM = [p for p in paramAll if id(p) not in [id(i) for i in paramB]]
+        paramM = [p for p in self.parameters() if id(p) not in [id(i) for i in paramB]]
         paramdic = {"M": paramM, "B": paramB}
         # a param dict when not filter by `weight_decay`
         if not any(weight_decay.values()):
             return paramdic
 
-        decay_weight_ge = defaultdict(
-            lambda: lambda m: [],
-            {
-                nn.Conv2d: lambda m: [id(m.weight)],
-                nn.Linear: lambda m: [id(m.weight)]
-            },
-        )
-        need_decay = (decay_weight_ge[type(m)](m) for m in self.modules())
-        need_decay = sum(need_decay, [])
-
-        for branch, param in paramdic.copy().items():
-            if weight_decay[branch]:
-                paramdic[branch +
-                         "_no_decay"] = [i for i in param if id(i) not in need_decay]
-                paramdic[branch] = [i for i in param if id(i) in need_decay]
-            else:
-                paramdic[branch] = param
-        return paramdic
+        return split_upto_decay(get_need_decay(self.modules()), paramdic, weight_decay)
 
     @property
     def branches(self):
@@ -108,39 +90,36 @@ class BIRADsYNet(YNet, MultiBranch):
         return r
 
 
-@autoPropertyClass
-class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
+class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
     """
     ToyNetV1 does not deal too much with BIRADs task. 
     It just apply an usual CE supervise on it.
     """
-
-    cmgr: CSG
-    __version__ = (1, 2)
-
-    def __init__(self, cmgr: CSG, cps: CPS, in_channel, *args, margin=0.3, **kwargs):
+    def __init__(
+        self, cmgr: CSG, cps: CPS, in_channel, *args, aug_weight=0.3333, aug_conf=None, **kwargs
+    ):
         nn.Module.__init__(self)
+        MultiTask.__init__(self, cmgr, aug_weight)
         self.cps = cps
         self.ynet = BIRADsYNet(cps, in_channel, *args, **kwargs)
         # online augment
-        aug_conf = kwargs.get('aug_conf', {})
+        if aug_conf is None: aug_conf = {}
         self.aug = RandomAffine(
             aug_conf.get('degrees', 10),
             aug_conf.get('translate', .2),
             aug_conf.get('scale', (0.8, 1.1)),
         )
         # loss bases
-        self.triplet = TripletBase(cmgr, margin, False)
+        SegBase = MSESegBase if isinstance(self, SegmentSupported) else IdentityBase
+        self.triplet = TripletBase(cmgr, False)
         self.ce = CEBase(cmgr, self)
-        self.segmse = MSESegBase(cmgr)
+        self.seg = SegBase(cmgr)
         self.siamese = SiameseBase(cmgr, self, self.ynet.yoc)
 
-    @noexcept
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)
 
-    @noexcept
-    def loss(self, meta: dict, X, Ym, Yb=None, mask=None) -> tuple:
+    def __loss__(self, meta: dict, X, Ym, Yb=None, mask=None) -> tuple:
         """return the result asis and a loss dict.
 
         Args:
@@ -163,8 +142,11 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
         # loss |= self.siamese(r['fi'], r2["fi"])
         if need_seg:
-            loss |= self.segmse(r["seg"], mask)
-            loss['seg_aug'] = self.segmse(r2['seg'], amask, value_only=True)
+            loss |= self.seg(r["seg"], mask)
+            # 0326. failed. converged slowly, but didn't collapse.
+            # mse is lower, but dice coeff is lower as well.
+            # contemp factor: proj_mlp, dataset size.
+            loss['seg_aug'] = value_only(self.seg(r2['seg'], amask))
 
         if meta["balanced"]:
             loss |= self.triplet(r["ft"], Ym)
@@ -172,64 +154,12 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch):
 
         return r, self.reduceLoss(loss, meta['augindices'])
 
-    def reduceLoss(self, loss: dict, aug_indices: list, w: float = 1 / 3) -> dict:
-        """reduce batch-wise loss to a loss item according to data-wise weight of a batch.
-
-        Args:
-            loss (dict): [description]
-            aug_indices (Tensor): [description]
-            w (float, optional): [description]. Defaults to 1/3.
-
-        Returns:
-            dict: [description]
-        """
-        device = first(loss.values()).device
-        aug_mask = torch.tensor(aug_indices, dtype=torch.float, device=device)
-        batch_weight = (1 - (1 - w) * aug_mask) / len(aug_indices)
-        # TODO
-        return {k: (batch_weight * v).sum() for k, v in loss.items()}
-
-    def multiTaskLoss(self, loss: dict):
-        """[summary]
-
-        Args:
-            loss (dict): [description]
-
-        Returns:
-            Tensor: [description]
-        """
-        cum_loss = 0
-        for k, v in loss.items():
-            cum_loss = cum_loss + v * self.cmgr.get("task." + k, 1)
-        return cum_loss
-
-    @staticmethod
-    def lossSummary(loss: dict) -> dict:
-        """[summary]
-
-        Args:
-            loss (dict): [description]
-
-        Returns:
-            dict: [description]
-        """
-        itemdic = {
-            "pm": "m/CE",
-            "tm": "m/triplet",
-            "sim": "siamise/neg_cos_similarity",
-            "seg": "segment/mse",
-            "pb": "b/CE",
-            "tb": "b/triplet",
-            "seg_aug": 'segment/mse_aug'
-        }
-        return {"loss/" + v: loss[k].detach() for k, v in itemdic.items() if k in loss}
-
     @property
     def branches(self):
         return self.ynet.branches
 
     def branch_weight(self, weight_decay: dict):
         d = self.ynet.branch_weight(weight_decay)
-        p = self.siamese.parameters()
+        p = self.pred_mlp.parameters()         # siamese
         d['M'] += p
         return d

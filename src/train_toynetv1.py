@@ -1,9 +1,8 @@
 import os
 
 from spectrainer import ToyNetTrainer
-from common.trainer import Trainer, getTrainComponents
+from common.trainer import getTrainComponents
 from toynet.toynetv1 import ToyNetV1
-from common.trainer import getConfig
 
 
 def post_script(post):

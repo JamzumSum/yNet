@@ -61,9 +61,7 @@ class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
 
         ld = lambda d, i: d.get(i, default[i])
         self.sub = [
-            None
-            if arg is None
-            else _ReduceLROnPlateauSub(
+            None if arg is None else _ReduceLROnPlateauSub(
                 i,
                 optimizer,
                 mode=ld(arg, "mode"),
@@ -75,8 +73,7 @@ class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
                 min_lr=ld(arg, "min_lr"),
                 eps=ld(arg, "eps"),
                 verbose=ld(arg, "verbose"),
-            )
-            for i, arg in enumerate(arglist)
+            ) for i, arg in enumerate(arglist)
         ]
 
     def step(self, metrics):
@@ -94,7 +91,7 @@ class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
 
 
 def get_arg_default(func, arg: str):
-    argls: list = func.__code__.co_varnames[: func.__code__.co_argcount]
+    argls: list = func.__code__.co_varnames[:func.__code__.co_argcount]
     if arg in argls:
         return func.__defaults__[argls.index(arg) - len(argls)]
 
@@ -114,3 +111,28 @@ def no_decay(weight_decay: dict, paramdic: dict, op_arg, default_lr):
             if i & 1:
                 paramdic[sk]["weight_decay"] = 0.0
     return paramdic, param_group_key
+
+
+def split_upto_decay(need_decay: list, paramdic: dict, weight_decay: dict):
+    for k in paramdic: paramdic[k] = list(paramdic[k])
+    for branch, param in paramdic.copy().items():
+        if weight_decay[branch]:
+            paramdic[branch +
+                     "_no_decay"] = [i for i in param if id(i) not in need_decay]
+            paramdic[branch] = [i for i in param if id(i) in need_decay]
+        else:
+            paramdic[branch] = param
+    return paramdic
+
+
+def get_need_decay(module_iter, decay_weight_ge: defaultdict = None):
+    if decay_weight_ge is None:
+        decay_weight_ge = defaultdict(
+            lambda: lambda m: [],
+            {
+                torch.nn.Conv2d: lambda m: [id(m.weight)],
+                torch.nn.Linear: lambda m: [id(m.weight)]
+            },
+        )
+    need_decay = (decay_weight_ge[type(m)](m) for m in module_iter)
+    return sum(need_decay, [])

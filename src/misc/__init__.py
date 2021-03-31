@@ -40,6 +40,20 @@ class CoefficientScheduler:
         elif isinstance(f, (float, int)):
             return f
 
+    def isConstant(self, varname, strict=False):
+        if (f := self._ge(varname)) is None:
+            if strict: raise KeyError(varname)
+        else:
+            if isinstance(f, (int, float)): return True
+            elif isinstance(f, str):
+                try:
+                    float(f)
+                except ValueError:
+                    pass
+                else:
+                    return True
+        return False
+
     def __getitem__(self, varname):
         return self.get(varname)
 

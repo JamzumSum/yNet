@@ -1,6 +1,5 @@
 from collections import defaultdict
 from itertools import chain
-from random import choices
 from random import shuffle as shuffle_
 
 import torch
@@ -120,11 +119,13 @@ def fixCollate(x):
     2. add a meta of the batch.
     """
     hashstat = defaultdict(list)
-    metas = []
+    metas = defaultdict(list)
     for i in x:
-        metas.append(i.pop("meta"))
-        hashstat[metas[-1].batchflag].append(i)
+        bf = i['meta'].batchflag
+        metas[bf].append(i.pop("meta"))
+        hashstat[bf].append(i)
     bf, x = max(hashstat.items(), key=lambda t: len(t[1]))
+    metas = metas[bf]
 
     x = deep_collate(x, True, ["meta"])
     x.setdefault("Yb", None)

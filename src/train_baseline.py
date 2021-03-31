@@ -1,9 +1,8 @@
 import os
 
 from spectrainer import ToyNetTrainer
-from common.trainer import Trainer, getTrainComponents
-from baseline.resnet import Resx2
-from common.trainer import getConfig
+from common.trainer import getTrainComponents
+from baseline.resnet import SimRes
 
 
 def post_script(post):
@@ -16,7 +15,7 @@ def post_script(post):
 
 
 def main():
-    trainer, net, data = getTrainComponents(ToyNetTrainer, Resx2, "./config/resnet.yml")
+    trainer, net, data = getTrainComponents(ToyNetTrainer, SimRes, "./config/simres.yml")
     trainer.fit(net, datamodule=data)
     post = trainer.paths.get("post_training", "")
     post_script(post)
