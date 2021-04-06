@@ -1,7 +1,7 @@
 model:
   in_channel: 1
   K: 6  # 2, 3, 4a, 4b, 4c, 5
-  width: 32
+  width: 16
 
   # for (512, 512) image, unet level + ypath level <= 8
   ulevel: 4
@@ -12,19 +12,22 @@ model:
   # random affine ranges for siamese. 
   aug_conf:
     degrees: 0
-    translate: .2
-    scale: [0.9, 1.1]
+    translate: .25
+    scale: 1
 
-# coefficients when calculating multi-task loss
+  smooth: 0.1
+
+# dynamic coefficients including multi-task loss
 coefficients:
   # margin when calculating triplet loss
-  margin: 0.3
+  margin: 0.3 + 0.5 * x ** 2
 
   # multi-task factors
   task:
     tm: 0.5 * x ** 4
-    seg: 0.5
-    seg_aug: x / 6
+    seg: 0.75
+    seg_aug: 0.25
+    sim: 0
 
 datasets:
   BUSI: 880

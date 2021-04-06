@@ -183,18 +183,18 @@ class ToyNetTrainer(FSMBase):
 
         return loss
 
+    @noexcept
     def validation_step(self, batch: dict, batch_idx, dataloader_idx=0):
         if dataloader_idx == 1:
             return
 
-        _, loss = self.net.loss(**batch)
-        loss = self.net.multiTaskLoss(loss)
+        loss = self.net.loss(**batch)
         self.log("val_loss", loss, prog_bar=True, logger=False)
         return loss
 
     def score_step(self, batch: tuple, batch_idx, dataloader_idx=0):
         X, Ym, Yb, mask = batch["X"], batch["Ym"], batch["Yb"], batch["mask"]
-        res = self.net(X, segment=False) if self.logSegmap else self.net(X)
+        res = self.net(X)
 
         res['ym'] = Ym
         if Yb is not None: res["yb"] = Yb

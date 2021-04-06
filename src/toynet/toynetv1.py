@@ -6,8 +6,6 @@ A toy implement for classifying benign/malignant and BIRADs
 """
 import torch
 import torch.nn as nn
-from common import freeze
-from common.decorators import NoGrad
 from common.optimizer import get_need_decay, split_upto_decay
 from common.support import *
 from data.augment.online import RandomAffine
@@ -74,7 +72,7 @@ class BIRADsYNet(YNet, MultiBranch):
 
         ft = r["ft"]
 
-        fi = self.norm_layer(ft)   # [N, Z], empirically, Z >= 128
+        fi = self.norm_layer(ft)   # [N, D], empirically, D >= 128
         r["fi"] = fi
 
         lm = self.mfc(fi)  # [N, 2]
@@ -96,7 +94,16 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
     It just apply an usual CE supervise on it.
     """
     def __init__(
-        self, cmgr: CSG, cps: CPS, in_channel, *args, aug_weight=0.3333, aug_conf=None, **kwargs
+        self,
+        cmgr: CSG,
+        cps: CPS,
+        in_channel,
+        *args,
+        zdim=2048,
+        aug_weight=0.3333,
+        aug_conf=None,
+        smooth=0.,
+        **kwargs
     ):
         nn.Module.__init__(self)
         MultiTask.__init__(self, cmgr, aug_weight)
@@ -105,54 +112,70 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         # online augment
         if aug_conf is None: aug_conf = {}
         self.aug = RandomAffine(
-            aug_conf.get('degrees', 10),
+            aug_conf.get('degrees', 0),
             aug_conf.get('translate', .2),
             aug_conf.get('scale', (0.8, 1.1)),
         )
         # loss bases
-        SegBase = MSESegBase if isinstance(self, SegmentSupported) else IdentityBase
-        self.triplet = TripletBase(cmgr, False)
-        self.ce = CEBase(cmgr, self)
-        self.seg = SegBase(cmgr)
-        self.siamese = SiameseBase(cmgr, self, self.ynet.yoc)
+        self.triplet = TripletBase(cmgr, True)
+        self.ce = CEBase(cmgr, smooth)
+        self.seg = MSESegBase(cmgr)
+        self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
+
+        isenable = lambda task: {
+            True: cmgr.get(f"task.{task}", 1) != 0,
+            False: False,
+            None: True
+        }[cmgr.isConstant(f'task.{task}')]
+
+        assert isenable('pm')
+        self.enable_seg = isinstance(self, SegmentSupported) and isenable('seg')
+        self.enable_sa = isinstance(self, SegmentSupported) and isenable('seg_aug')
+        self.enable_siam = isenable('sim')
+
+        if not self.enable_seg: self.seg.enable = False
+        if not isenable('tm'): self.triplet.enable = False
+        if not self.enable_siam: self.siamese.enable = False
 
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)
 
-    def __loss__(self, meta: dict, X, Ym, Yb=None, mask=None) -> tuple:
+    def __loss__(self, meta: dict, X, Ym, Yb=None, mask=None, reduce=True) -> tuple:
         """return the result asis and a loss dict.
 
         Args:
             meta (dict): batch meta
-            X (Tensor): [description]
+            X (Tensor): image
             Ym (Tensor): [description]
             Yb (Tensor, optional): [description]. Defaults to None.
-            mask (Tensor, optional): [description]. Defaults to None.
+            mask (Tensor, optional): ground-truth. Defaults to None.
+            reduce (bool, optional): whether to reduce loss dict. Defaults to True.
 
         Returns:
-            tuple: [description]
+            tuple: resultdic, lossdic
         """
-        need_seg = mask is not None
+        need_seg = self.enable_seg and mask is not None
+        need_sa = need_seg and self.enable_sa
 
-        aX, amask = self.aug(X, mask) if need_seg else (self.aug(X), None)
         r: dict = self.ynet(X, segment=need_seg, classify=True, logit=True)
-        r2 = self.ynet(aX, segment=need_seg, classify=True, logit=True)
+        if need_sa or self.enable_siam:
+            aX, amask = self.aug(X, mask) if need_sa else (self.aug(X), None)
+            r2 = self.ynet(aX, segment=need_sa, classify=self.enable_siam, logit=True)
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
+        loss |= self.seg(r.get('seg', None), mask)
 
-        # loss |= self.siamese(r['fi'], r2["fi"])
-        if need_seg:
-            loss |= self.seg(r["seg"], mask)
-            # 0326. failed. converged slowly, but didn't collapse.
-            # mse is lower, but dice coeff is lower as well.
-            # contemp factor: proj_mlp, dataset size.
+        if self.enable_siam:
+            loss |= self.siamese(r['fi'], r2['fi'])
+
+        if need_sa:
             loss['seg_aug'] = value_only(self.seg(r2['seg'], amask))
 
         if meta["balanced"]:
             loss |= self.triplet(r["ft"], Ym)
-            # TODO: triplet of BIRADs
 
-        return r, self.reduceLoss(loss, meta['augindices'])
+        if reduce: loss = self.reduceLoss(loss, meta['augindices'])
+        return r, loss
 
     @property
     def branches(self):
@@ -160,6 +183,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
 
     def branch_weight(self, weight_decay: dict):
         d = self.ynet.branch_weight(weight_decay)
-        p = self.pred_mlp.parameters()         # siamese
-        d['M'] += p
+        p = self.siamese.parameters()
+        iorf = lambda s: s in d and s
+        d[iorf('M_no_decay') or iorf('M')].extend(p)
         return d

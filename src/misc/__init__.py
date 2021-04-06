@@ -2,6 +2,14 @@ from common.decorators import checkpointed
 from omegaconf import DictConfig, OmegaConf
 
 
+def isfloat(s: str):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
 class CoefficientScheduler:
     __slots__ = "_fs", "_varmap", "_var", "__op__", "__curmap"
 
@@ -10,6 +18,7 @@ class CoefficientScheduler:
         self._varmap = varmap
         self._var = {}
         self.__op__ = {}
+        self.__curmap = {}
         exec("from math import *", None, self.__op__)
 
     def _ge(self, name, default=None):
@@ -43,16 +52,13 @@ class CoefficientScheduler:
     def isConstant(self, varname, strict=False):
         if (f := self._ge(varname)) is None:
             if strict: raise KeyError(varname)
+            else: return None
         else:
             if isinstance(f, (int, float)): return True
             elif isinstance(f, str):
-                try:
-                    float(f)
-                except ValueError:
-                    pass
-                else:
-                    return True
-        return False
+                return isfloat(f)
+            else:
+                raise TypeError(f)
 
     def __getitem__(self, varname):
         return self.get(varname)

@@ -13,8 +13,9 @@ class SimRes(torch.nn.Module, MultiTask):
     A simple ResNet. 
     Support: resnet18, resnet34, resnet50, resnet101, resnet152
     '''
-    def __init__(self, cmgr: CSG, cps: CPS, model='resnet34'):
+    def __init__(self, cmgr: CSG, cps: CPS, model='resnet34', aug_weight=0.3333):
         torch.nn.Module.__init__(self)
+        MultiTask.__init__(self, cmgr, aug_weight)
         self.sigma = nn.Softmax(dim=1)
         self.mbranch = getattr(resnet, model)(num_classes=2)
 
@@ -31,11 +32,12 @@ class SimRes(torch.nn.Module, MultiTask):
         d['pm'] = self.sigma(d['lm'])
         return d
 
-    def __loss__(self, meta, X, Ym, *args, **argv):
+    def __loss__(self, meta, X, Ym, reduce=True, *args, **argv):
         r = self.forward(X, logit=True)
         lm = r['lm']
         loss = self.ce(lm, None, Ym, None)
-        return r, self.reduceLoss(loss, meta['augindices'])
+        if reduce: loss = self.reduceLoss(loss, meta['augindices'])
+        return r, loss
 
 
 class Resx2(SimRes, MultiBranch):
@@ -58,12 +60,13 @@ class Resx2(SimRes, MultiBranch):
         d['pb'] = self.sigma(d['lb'])
         return d
 
-    def __loss__(self, meta, X, Ym, Yb=None, *args, **argv):
+    def __loss__(self, meta, X, Ym, Yb=None, reduce=True, *args, **argv):
         r = self.forward(X, logit=False)
         lm = r['lm']
         lb = r['lb']
         loss = self.ce(lm, lb, Ym, Yb)
-        return r, self.reduceLoss(loss, meta['augindices'])
+        if reduce: loss = self.reduceLoss(loss, meta['augindices'])
+        return r, loss
 
     @property
     def branches(self):

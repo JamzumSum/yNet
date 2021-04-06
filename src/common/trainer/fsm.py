@@ -29,6 +29,7 @@ class FSMBase(pl.LightningModule, ABC):
         self.sg_conf = sg_conf
         self.model_conf = model_conf
         self.cosg = CoefficientScheduler(coeff_conf, {"piter": "x", "max_epochs": "M"})
+        self.cosg.update(piter=0)
 
         if OmegaConf.is_dict(op_conf):
             self.op_cls = getattr(torch.optim, op_conf.pop("name", "SGD"))

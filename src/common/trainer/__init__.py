@@ -6,6 +6,7 @@ A universial trainer ready to be inherited.
 """
 import os
 from datetime import date
+from typing import Type
 
 import pytorch_lightning as pl
 import torch
@@ -66,12 +67,16 @@ class Trainer(pl.Trainer):
 
 def getConfig(path) -> DictConfig:
     d = OmegaConf.load(path)
-    if "import" in d:
-        path = os.path.join(os.path.dirname(path), d.pop("import"))
-        imd = getConfig(path)
-        return OmegaConf.merge(imd, d)
-    else:
-        return d
+    if "import" not in d: return d
+    
+    imp = d.pop("import")
+    if isinstance(imp, str):
+        imp = [imp]
+    elif not isinstance(imp, (list, ListConfig)):
+        raise TypeError(imp)
+    path = [os.path.join(os.path.dirname(path), i) for i in imp]
+    imd = [getConfig(p) for p in path]
+    return OmegaConf.merge(*imd, d)
 
 
 def gpus2device(gpus):

@@ -69,5 +69,6 @@ class MultiTask(HasLoss):
         """
         device = first(loss.values()).device
         aug_mask = torch.tensor(aug_indices, dtype=torch.float, device=device)
-        batch_weight = (1 - (1 - self.aug_weight) * aug_mask) / len(aug_indices)
+        batch_weight = (1 - (1 - self.aug_weight) * aug_mask)
+        batch_weight = batch_weight / batch_weight.sum()
         return {k: (batch_weight * v).sum() for k, v in loss.items()}

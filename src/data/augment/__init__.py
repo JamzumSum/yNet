@@ -32,28 +32,21 @@ def elastic(X, kernel, padding, alpha=34.0):
 
     xgrid = torch.arange(W, device=dx.device).repeat(H, 1)
     ygrid = torch.arange(H, device=dy.device).repeat(W, 1).T
-    with torch.no_grad():
-        dx = alpha * F.conv2d(
-            unsqueeze_as(dx, X, 0), kernel, bias=None, padding=padding)
-        dy = alpha * F.conv2d(
-            unsqueeze_as(dy, X, 0), kernel, bias=None, padding=padding)
+    dx = alpha * F.conv2d(unsqueeze_as(dx, X, 0), kernel, bias=None, padding=padding)
+    dy = alpha * F.conv2d(unsqueeze_as(dy, X, 0), kernel, bias=None, padding=padding)
     H /= 2
     W /= 2
     dx = (dx + xgrid - W) / W
     dy = (dy + ygrid - H) / H
     grid = torch.stack((dx.squeeze(1), dy.squeeze(1)), dim=-1)
-    return F.grid_sample(X,
-                         grid,
-                         padding_mode="reflection",
-                         align_corners=False)
+    return F.grid_sample(X, grid, padding_mode="reflection", align_corners=False)
 
 
 @d3support()
 def affine(X, dx=0., dy=0., scale=1., angle=0., interpolation='bilinear'):
     rad = radians(angle)
     theta = torch.tensor(
-        [[cos(rad) / scale, sin(-rad), -dx], 
-        [sin(rad), cos(rad) / scale, -dy]],
+        [[cos(rad) / scale, sin(-rad), -dx], [sin(rad), cos(rad) / scale, -dy]],
         device=X.device,
     )
     grid = F.affine_grid(
