@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ProgressBarBase
 from rich.progress import BarColumn, Progress, ProgressColumn, Text
 
 
@@ -34,7 +35,7 @@ class BarDictColumn(ProgressColumn):
         return Text("[%s]" % ", ".join(items))
 
 
-class RichProgressBar(pl.callbacks.ProgressBarBase):
+class RichProgressBar(ProgressBarBase):
     def __init__(self):
         super().__init__()
         self.pg = Progress(
@@ -69,8 +70,8 @@ class RichProgressBar(pl.callbacks.ProgressBarBase):
         if self.test_batch_idx >= self.total_test_batches:
             self.pg.stop_task(self._test_id)
 
-    def on_test_start(self, trainer, pl_module):
-        super().on_test_start(trainer, pl_module)
+    def on_test_epoch_start(self, trainer, pl_module) -> None:
+        super().on_test_epoch_start(trainer, pl_module)
         if self._test_id is not None:
             self.pg.remove_task(self._test_id)
         self._test_id = self.pg.add_task(
@@ -88,8 +89,8 @@ class RichProgressBar(pl.callbacks.ProgressBarBase):
         if self.train_batch_idx >= self.total_train_batches:
             self.pg.stop_task(self._train_id)
 
-    def on_epoch_start(self, trainer, pl_module):
-        super().on_epoch_start(trainer, pl_module)
+    def on_train_epoch_start(self, trainer, pl_module):
+        super().on_train_epoch_start(trainer, pl_module)
         if self._train_id is not None:
             self.pg.remove_task(self._train_id)
         if self._val_id is not None:
@@ -109,8 +110,8 @@ class RichProgressBar(pl.callbacks.ProgressBarBase):
         if self.val_batch_idx >= self.total_val_batches:
             self.pg.stop_task(self._val_id)
 
-    def on_validation_start(self, trainer, pl_module):
-        super().on_validation_start(trainer, pl_module)
+    def on_validation_epoch_start(self, trainer, pl_module) -> None:
+        super().on_validation_epoch_start(trainer, pl_module)
         self._val_id = self.pg.add_task(
             "epoch V%03d" % trainer.current_epoch, total=self.total_val_batches
         )
@@ -121,4 +122,3 @@ class RichProgressBar(pl.callbacks.ProgressBarBase):
 
     def print(self, *args, **kwargs):
         self.pg.console.print(*args, **kwargs)
-

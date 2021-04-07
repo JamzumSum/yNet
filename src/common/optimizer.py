@@ -1,5 +1,4 @@
 from collections import defaultdict
-
 import torch
 
 
@@ -24,76 +23,67 @@ class DirectLR(torch.optim.lr_scheduler._LRScheduler):
         return self._lr
 
 
-class _ReduceLROnPlateauSub(torch.optim.lr_scheduler.ReduceLROnPlateau):
-    def __init__(self, idx, *args, **argv):
-        self.idx = idx
-        torch.optim.lr_scheduler.ReduceLROnPlateau.__init__(self, *args, **argv)
+class SubOptimizer(torch.optim.Optimizer):
+    __slots__ = ('__o', '__i')
 
-    def _reduce_lr(self, epoch):
-        param_group = self.optimizer.param_groups[self.idx]
-        old_lr = float(param_group["lr"])
-        new_lr = max(old_lr * self.factor, self.min_lrs[self.idx])
-        if old_lr - new_lr > self.eps:
-            param_group["lr"] = new_lr
-            if self.verbose:
-                print(
-                    "Epoch {:5d}: reducing learning rate"
-                    " of group {} to {:.4e}.".format(epoch, self.idx, new_lr)
-                )
+    def __init__(self, optimizer, idx):
+        self.__o = optimizer
+        self.__i = idx
+
+    def __getattribute__(self, name: str):
+        if name == 'param_groups': return [self.__o.param_groups[self.__i]]
+        try:
+            return super().__getattribute__(name)
+        except AttributeError:
+            return getattr(self.__o, name)
+
+    def __instancecheck__(self, instance) -> bool:
+        return isinstance(instance, type(self.__o))
 
 
-class ReduceLROnPlateau(torch.optim.lr_scheduler.ReduceLROnPlateau):
-    def __init__(self, optimizer, arglist):
-        default = {
-            "mode": "min",
-            "factor": 0.1,
-            "patience": 10,
-            "threshold": 1e-4,
-            "threshold_mode": "rel",
-            "cooldown": 0,
-            "min_lr": 0,
-            "eps": 1e-8,
-            "verbose": False,
-        }
-        self.optimizer = optimizer
-        if isinstance(arglist, (list, tuple)) and len(arglist) == 1:
-            arglist = arglist * len(optimizer.parameter_groups)
+def getBranchScheduler(cls: type, optimizer, arglist: list[dict], extra=None):
+    class BranchScheduler(cls):
+        def __init__(self, optimizer, arglist: list[dict], extra: dict = None):
+            self.optimizer = optimizer
+            if isinstance(arglist, (list, tuple)) and len(arglist) == 1:
+                arglist = arglist * len(optimizer.parameter_groups)
 
-        ld = lambda d, i: d.get(i, default[i])
-        self.sub = [
-            None if arg is None else _ReduceLROnPlateauSub(
-                i,
-                optimizer,
-                mode=ld(arg, "mode"),
-                factor=ld(arg, "factor"),
-                patience=ld(arg, "patience"),
-                threshold=ld(arg, "threshold"),
-                threshold_mode=ld(arg, "threshold_mode"),
-                cooldown=ld(arg, "cooldown"),
-                min_lr=ld(arg, "min_lr"),
-                eps=ld(arg, "eps"),
-                verbose=ld(arg, "verbose"),
-            ) for i, arg in enumerate(arglist)
-        ]
+            if extra is None: extra = {}
+            extra = {k: v for k, v in extra.items() if k in get_arg_name(cls.__init__)}
+            
+            self.sub = [
+                None
+                if arg is None else cls(SubOptimizer(optimizer, i), **arg, **extra)
+                for i, arg in enumerate(arglist)
+            ]
 
-    def step(self, metrics):
-        ld = lambda l, i: l[i] if isinstance(l, (list, tuple)) else l
+        def step(self, metrics=None):
+            if metrics is not None:
+                ld = lambda l, i: l[i] if isinstance(l, (list, tuple)) else l
 
-        for i, sg in enumerate(self.sub):
-            if sg:
-                sg.step(ld(metrics, i))
+            for i, sg in enumerate(self.sub):
+                if not sg: continue
+                if metrics is None: sg.step()
+                else: sg.step(ld(metrics, i))
 
-    def setepoch(self, epoch):
-        self.last_epoch = epoch
-        for sg in self.sub:
-            if sg:
-                sg.last_epoch = epoch
+        def setepoch(self, epoch):
+            self.last_epoch = epoch
+            for sg in self.sub:
+                if sg: sg.last_epoch = epoch
+
+    return BranchScheduler(optimizer, arglist, extra)
+
+
+def get_arg_name(func) -> list:
+    return func.__code__.co_varnames[:func.__code__.co_argcount]
 
 
 def get_arg_default(func, arg: str):
-    argls: list = func.__code__.co_varnames[:func.__code__.co_argcount]
+    argls = get_arg_name(func)
     if arg in argls:
         return func.__defaults__[argls.index(arg) - len(argls)]
+    else:
+        raise ValueError(arg)
 
 
 def no_decay(weight_decay: dict, paramdic: dict, op_arg, default_lr):
@@ -114,7 +104,8 @@ def no_decay(weight_decay: dict, paramdic: dict, op_arg, default_lr):
 
 
 def split_upto_decay(need_decay: list, paramdic: dict, weight_decay: dict):
-    for k in paramdic: paramdic[k] = list(paramdic[k])
+    for k in paramdic:
+        paramdic[k] = list(paramdic[k])
     for branch, param in paramdic.copy().items():
         if weight_decay[branch]:
             paramdic[branch +

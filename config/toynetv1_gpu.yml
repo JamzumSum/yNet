@@ -15,7 +15,7 @@ model:
     translate: .25
     scale: 1
 
-  smooth: 0.1
+  smooth: 0
 
 # dynamic coefficients including multi-task loss
 coefficients:
@@ -45,6 +45,7 @@ misc:
   continue: False
   load_from: latest
 
+  # lr warmup strategy. null as don't warmup
   lr_warmup:
     interval: epoch
     times: 10
@@ -57,15 +58,21 @@ optimizer:
   - lr: 4e-3
 
 # LRReduceOnPlateau only
-scheduler: null
+scheduler: 
+  # - ReduceLROnPlateau
+  # - factor: 0.9
+  #   patience: 4
+  - OneCycleLR
+  - max_lr: 4e-3
+  
 
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler
 branch:
-  M:
-    scheduler:
-      factor: 0.9
-      patience: 4
+  B: 
+    optimizer: null
+    scheduler: null
+      
 
 dataloader:
   training:

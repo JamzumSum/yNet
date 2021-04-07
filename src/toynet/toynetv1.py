@@ -122,11 +122,8 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         self.seg = MSESegBase(cmgr)
         self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
 
-        isenable = lambda task: {
-            True: cmgr.get(f"task.{task}", 1) != 0,
-            False: False,
-            None: True
-        }[cmgr.isConstant(f'task.{task}')]
+        isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
+                                 ) or cmgr.get(f"task.{task}", 1) != 0
 
         assert isenable('pm')
         self.enable_seg = isinstance(self, SegmentSupported) and isenable('seg')

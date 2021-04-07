@@ -52,3 +52,8 @@ def spatial_softmax(x, dtype=None):
     assert x.dim() == 4
     N, C, H, W = x.shape
     return torch.softmax(x.view(N, C, -1), -1, dtype).view(N, C, H, W)
+
+
+@torch.jit.script
+def swish(x):
+    return x * x.sigmoid()

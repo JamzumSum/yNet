@@ -4,29 +4,45 @@ A trainer for toynets.
 * author: JamzumSum
 * create: 2021-1-13
 """
-from tarfile import NUL
+from warnings import warn
 
 import torch
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 from common import deep_collate, unsqueeze_as
 from common.loss import diceCoefficient
 from common.optimizer import (
-    ReduceLROnPlateau, get_arg_default, get_need_decay, no_decay, split_upto_decay
+    get_arg_default, get_need_decay, getBranchScheduler, no_decay, split_upto_decay
 )
 from common.support import *
 from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
 from common.utils import gray2JET
+import misc
 from misc.decorators import noexcept
 from misc.updatedict import shallow_update
 from toynet.lossbase import MultiTask
 
-plateau_lr_dic = lambda sg, monitor: {
-    "scheduler": sg,
-    "interval": "epoch",
-    "reduce_on_plateau": True,
-    "monitor": monitor,
-}
+
+def getPLSchedulerDict(sg, monitor=None):
+    if isinstance(sg, ReduceLROnPlateau):
+        return {
+            "scheduler": sg,
+            "interval": "epoch",
+            "reduce_on_plateau": True,
+            "monitor": monitor,
+        }
+    elif isinstance(sg, OneCycleLR):
+        return {
+            "scheduler": sg,
+            "interval": "step",
+        }
+    else:
+        warn(f'{type(sg)} is not implement. `step` will be called after every epoch.')
+        return {
+            "scheduler": sg,
+            "interval": "epoch",
+        }
 
 
 class ToyNetTrainer(FSMBase):
@@ -120,14 +136,18 @@ class ToyNetTrainer(FSMBase):
 
         msg_param = [sg_arg[k] for k in param_group_key if k in msg_param_key]
         sgs = []
+        extra = {
+            'epochs': self.trainer.max_epochs,
+            'steps_per_epoch': self.steps_per_epoch
+        }
         if msg_param:
-            msg = ReduceLROnPlateau(mop, msg_param)
-            sgs.append(plateau_lr_dic(msg, "val_loss"))
+            msg = getBranchScheduler(self.sg_cls, mop, msg_param, extra)
+            sgs.append(getPLSchedulerDict(msg, "val_loss"))
         if self.adversarial:
             dsg_param = [sg_arg[k] for k in param_group_key if k not in msg_param_key]
             if dsg_param:
-                dsg = ReduceLROnPlateau(ops[-1], dsg_param)
-                sgs.append(plateau_lr_dic(dsg, "dis_loss"))
+                dsg = getBranchScheduler(self.sg_cls, ops[-1], dsg_param, extra)
+                sgs.append(getPLSchedulerDict(dsg, "dis_loss"))
 
         return ops, sgs
 
@@ -145,10 +165,7 @@ class ToyNetTrainer(FSMBase):
         times = warmup_conf.get('times', 500)
 
         if interval == 'epoch':
-            td = self.trainer.train_dataloader
-            total_len = sum(len(i)
-                            for i in td) if isinstance(td, (list, tuple)) else len(td)
-            times *= total_len
+            times *= self.steps_per_epoch
 
         if self.trainer.global_step < times:
             lr_scale = min(1., (self.trainer.global_step + 1.) / times)
@@ -266,7 +283,7 @@ class ToyNetTrainer(FSMBase):
                     p = p[:, -1]
                 if p.dim() == 1:
                     self.logger.experiment.add_pr_curve(
-                        f"{k}/{caption}", p, y, self.current_epoch
+                        f"{k}/{caption}", y, p, self.current_epoch
                     )
                     self.logger.experiment.add_histogram(
                         f"distribution/{k}/{caption}", p, self.current_epoch

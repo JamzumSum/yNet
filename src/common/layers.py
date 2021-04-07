@@ -1,18 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from . import swish
 
 
 class SEBlock(nn.Sequential):
     def __init__(self, L, hs=128):
         nn.Sequential.__init__(
-            self,
-            nn.Linear(L, hs),
-            nn.ReLU(),
-            nn.Linear(hs, L),
+            self, nn.Linear(L, hs), nn.ReLU(), nn.Linear(hs, L),
             nn.Softmax(dim=-1)
-            # use softmax instead of sigmoid here since the attention-ed channels are sumed,
-            # while the sum might be greater than 1 if sum of the attention vector is not restricted.
+                                                                 # use softmax instead of sigmoid here since the attention-ed channels are sumed,
+                                                                 # while the sum might be greater than 1 if sum of the attention vector is not restricted.
         )
         nn.init.constant_(self[2].bias, 1 / L)
 
@@ -21,10 +19,10 @@ class SEBlock(nn.Sequential):
         X: [N, K, H, W, L]
         O: [N, K, H, W]
         """
-        X = X.permute(4, 0, 1, 2, 3)  # [L, N, K, H, W]
-        Xp = F.adaptive_avg_pool2d(X, (1, 1))  # [L, N, K, 1, 1]
-        Xp = Xp.permute(1, 2, 3, 4, 0)  # [N, K, 1, 1, L]
-        Xp = nn.Sequential.forward(self, Xp).permute(4, 0, 1, 2, 3)  # [L, N, K, 1, 1]
+        X = X.permute(4, 0, 1, 2, 3)                                # [L, N, K, H, W]
+        Xp = F.adaptive_avg_pool2d(X, (1, 1))                       # [L, N, K, 1, 1]
+        Xp = Xp.permute(1, 2, 3, 4, 0)                              # [N, K, 1, 1, L]
+        Xp = nn.Sequential.forward(self, Xp).permute(4, 0, 1, 2, 3) # [L, N, K, 1, 1]
         return (X * Xp).sum(dim=0)
 
 
@@ -34,7 +32,6 @@ class PyramidPooling(nn.Module):
     Otherwise only the patch with maximum average confidence has grad while patches and small.
     Moreover, the size of patches are fixed so is hard to select. Multi-scaled patches are suitable.
     """
-
     def __init__(self, patch_sizes, hs=128):
         nn.Module.__init__(self)
         if any(i & 1 for i in patch_sizes):
@@ -60,10 +57,10 @@ class PyramidPooling(nn.Module):
             F.avg_pool2d(X, patch_size, patch_size // 2)
             for patch_size in self.patch_sizes
         ]
-        base = ls.pop(0)  # [N, K, H//P0, W//P0]
+        base = ls.pop(0)                       # [N, K, H//P0, W//P0]
         ls = [F.interpolate(i, base.shape[-2:], mode="nearest") for i in ls]
         ls.insert(0, base)
-        ls = torch.stack(ls, dim=-1)  # [N, K, H//P0, W//P0, L]
+        ls = torch.stack(ls, dim=-1)           # [N, K, H//P0, W//P0, L]
         return self.atn(ls)
 
 
@@ -82,3 +79,8 @@ class MLP(nn.Sequential):
         if final_relu:
             layers.append(nn.ReLU())
         super().__init__(*layers)
+
+
+class Swish(nn.Module):
+    def forward(self, x):
+        return swish(x)

@@ -8,9 +8,10 @@ A torch implement for U-Net.
 """
 import torch
 import torch.nn as nn
-from misc.decorators import autoPropertyClass
+from common.layers import Swish
 from common.support import SelfInitialed
 from misc import CheckpointSupport
+from misc.decorators import autoPropertyClass
 
 
 @autoPropertyClass
@@ -98,7 +99,7 @@ class ConvStack2(ChannelInference):
     def __init__(self, ic, oc, *, res=False, norm="batchnorm", atrous_num=0):
         super().__init__(ic, oc)
 
-        # nonlinear = nn.ELU if ic < oc else nn.ReLU
+        # nonlinear = Swish if ic < oc else nn.ReLU
         nonlinear = nn.ReLU
         bias = norm == "none"
 

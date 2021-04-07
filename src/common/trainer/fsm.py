@@ -3,11 +3,19 @@ import os
 from abc import ABC, abstractclassmethod
 from collections import defaultdict
 from datetime import date
+import omegaconf
 
 import pytorch_lightning as pl
 import torch
 from misc import CoefficientScheduler, CheckpointSupport
 from omegaconf import DictConfig, ListConfig, OmegaConf
+
+
+def splitNameConf(conf, search, default_name: str = None):
+    if OmegaConf.is_dict(conf):
+        return getattr(search, conf.pop("name", default_name)), conf
+    elif OmegaConf.is_list(conf):
+        return getattr(search, conf[0]), {} if len(conf) == 1 else conf[1]
 
 
 class FSMBase(pl.LightningModule, ABC):
@@ -21,22 +29,19 @@ class FSMBase(pl.LightningModule, ABC):
         sg_conf: DictConfig,
     ):
         # UPSTREAM BUG: pl.LightningModule.__init__(self) failed with hparam saving...
+        # TODO: save hparam
         super().__init__()
 
         self.cls_name = Net.__name__
 
         self.misc = misc
-        self.sg_conf = sg_conf
         self.model_conf = model_conf
+        self.op_cls, self.op_conf = splitNameConf(op_conf, torch.optim, 'SGD')
+        self.sg_cls, self.sg_conf = splitNameConf(sg_conf, torch.optim.lr_scheduler)
+
+        # init cmgr
         self.cosg = CoefficientScheduler(coeff_conf, {"piter": "x", "max_epochs": "M"})
         self.cosg.update(piter=0)
-
-        if OmegaConf.is_dict(op_conf):
-            self.op_cls = getattr(torch.optim, op_conf.pop("name", "SGD"))
-            self.op_conf = op_conf
-        elif OmegaConf.is_list(op_conf):
-            self.op_cls = getattr(torch.optim, op_conf[0])
-            self.op_conf = {} if len(op_conf) == 1 else op_conf[1]
 
         self.net = Net(
             cmgr=self.cosg,
@@ -70,6 +75,14 @@ class FSMBase(pl.LightningModule, ABC):
         Call this only when training/testing.
         """
         return self.current_epoch / self.trainer.max_epochs
+
+    @property
+    def steps_per_epoch(self):
+        td = self.train_dataloader()
+        r = sum(len(i) for i in td) if isinstance(td, (list, tuple)) else len(td)
+        limit = self.trainer.limit_train_batches
+        if isinstance(limit, float): limit = int(limit * r)
+        return min(r, limit)
 
     ###########################################################################
     ######################## hooks defined below ##############################
