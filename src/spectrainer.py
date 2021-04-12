@@ -320,5 +320,11 @@ class ToyNetTrainer(FSMBase):
         r = self.net(X, segment=False)
         pm, pb = r['pm'], r['pb']
 
-        for meta, pmi, ymi in zip(detail, pm, ym):
-            self.logger.log_metrics(meta, pm=pmi.tolist(), ym=ymi.item())
+        for meta, pmi, ymi, pbi, ybi in zip(detail, pm, ym, pb, yb):
+            self.logger.log_metrics(
+                meta,
+                pm=pmi.tolist(),
+                pb=pbi.tolist(),
+                ym=ymi.item(),
+                yb=ybi.item(),
+            )

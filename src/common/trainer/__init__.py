@@ -129,6 +129,7 @@ def getTrainComponents(FSM, Net, conf_path, logger=None):
         net = net.load_from_checkpoint(path, **kwargs)
     else:
         net.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
+        net.hparams = conf
 
     net.score_caption = datamodule.score_caption
     pl.utilities.seed.seed_everything(net.seed)

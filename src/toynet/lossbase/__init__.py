@@ -20,6 +20,16 @@ class HasLoss(ABC):
 
 
 class MultiTask(HasLoss):
+    itemdic = {
+        "pm": "m/CE",
+        "tm": "m/triplet",
+        "sim": "siamise/neg_cos_similarity",
+        "seg": "segment/mse",
+        "pb": "b/CE",
+        "tb": "b/triplet",
+        "seg_aug": 'segment/mse_aug'
+    }
+
     def __init__(self, cmgr: CSG, aug_weight=0.3333) -> None:
         self.cmgr = cmgr
         self.aug_weight = aug_weight
@@ -46,16 +56,10 @@ class MultiTask(HasLoss):
         Returns:
             dict: [description]
         """
-        itemdic = {
-            "pm": "m/CE",
-            "tm": "m/triplet",
-            "sim": "siamise/neg_cos_similarity",
-            "seg": "segment/mse",
-            "pb": "b/CE",
-            "tb": "b/triplet",
-            "seg_aug": 'segment/mse_aug'
+        return {
+            "loss/" + v: loss[k].detach()
+            for k, v in MultiTask.itemdic.items() if k in loss
         }
-        return {"loss/" + v: loss[k].detach() for k, v in itemdic.items() if k in loss}
 
     def reduceLoss(self, loss: dict, aug_indices: list) -> dict:
         """reduce batch-wise loss to a loss item according to data-wise weight of a batch.

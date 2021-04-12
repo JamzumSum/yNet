@@ -44,8 +44,8 @@ def focal_smooth_bce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean")
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
     bce = F.binary_cross_entropy_with_logits(P, YK, weight=weight, reduction="none")
-    pt = torch.exp(-bce)  # [N, K]
-    gms = (1 - pt) ** gamma  # [N, K]
+    pt = torch.exp(-bce)           # [N, K]
+    gms = (1 - pt) ** gamma        # [N, K]
     return _reduct(gms * bce, reduction)
 
 
@@ -62,15 +62,15 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
     """
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
-    ce = -YK * P.log_softmax(1)  # [N, K]
+    ce = -YK * P.log_softmax(1)    # [N, K]
 
-    pt = torch.exp(-ce)  # [N, K]
-    gms = (1 - pt) ** gamma  # [N, K]
+    pt = torch.exp(-ce)            # [N, K]
+    gms = (1 - pt) ** gamma        # [N, K]
 
     if weight is not None:
         weight = weight / torch.sum(weight)
         ce = ce * weight
-    ce = (ce * gms).sum(dim=1)  # [N]
+    ce = (ce * gms).sum(dim=1)     # [N]
     if reduction == "mean" and weight is not None:
         batchweight = (weight * YK).sum(dim=1)
         return ce.sum() / batchweight.sum()
@@ -78,11 +78,19 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
         return _reduct(ce, reduction)
 
 
-# @torch.jit.script
-def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
-    # type: (Tensor, Tensor, float, str) -> Tensor
-    r""" computational formula：
-        dice = (2 * tp) / (2 * tp + fp + fn)
+@torch.jit.script
+def diceCoefficient(p, gt, eps: float = 1e-5, reduction: str = "mean"):
+    """computational formula：
+        dice = (2 * tp) / (2 * tp + fp + fn)]
+
+    Args:
+        p (Tensor): [description]
+        gt (Tensor): [description]
+        eps (float, optional): [description]. Defaults to 1e-5.
+        reduction (str, optional): [description]. Defaults to "mean".
+
+    Returns:
+        Tensor: [description]
     """
     N = gt.size(0)
     pflat = p.view(N, -1)
@@ -92,5 +100,5 @@ def diceCoefficient(p, gt, eps=1e-5, reduction="mean"):
     FP = torch.sum(pflat, dim=1) - TP
     FN = torch.sum(gt_flat, dim=1) - TP
     dice = (2 * TP).clamp(min=eps) / (2 * TP + FP + FN).clamp(min=eps)
-    
+
     return _reduct(dice, reduction)

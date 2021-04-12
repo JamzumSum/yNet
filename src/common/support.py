@@ -28,7 +28,7 @@ class MultiBranch(ABC):
         pass
 
     @abstractproperty
-    def branches(self):
+    def branches(self)-> tuple:
         pass
 
 

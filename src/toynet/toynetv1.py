@@ -112,7 +112,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         # online augment
         if aug_conf is None: aug_conf = {}
         self.aug = RandomAffine(
-            aug_conf.get('degrees', 0),
+            0,
             aug_conf.get('translate', .2),
             aug_conf.get('scale', (0.8, 1.1)),
         )

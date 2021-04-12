@@ -3,7 +3,7 @@ from unittest import TestCase
 import torch
 import torch.nn as nn
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
-from common.loss.triplet import SemiHardTripletLoss, distance_weighted_sampling, cosine_dist
+from common.loss.triplet import WeightedExampleTripletLoss, distance_weighted_sampling, cosine_dist
 
 
 def teq(t1, t2, eps=1e-5):
@@ -100,6 +100,22 @@ class FocalCETest(TestCase):
         self.assertTrue(torch.all(P[:, 0] > 0.2))
         self.assertTrue(torch.all(P[:, 1] < 0.8))
 
+    def testSameBP(self):
+        P = torch.empty(4, 2)
+        Y = torch.zeros(4).long()
+        P[:, 0], P[:, 1] = 0.2, 0.8
+        weight = torch.Tensor([0.8, 0.2])
+        P1 = P.clone().requires_grad_(True)
+        P2 = P.clone().requires_grad_(True)
+
+        op = torch.optim.AdamW((P1, P2), lr=1)
+        focal_smooth_ce(P1, Y, gamma=0, weight=weight).backward()
+        F.cross_entropy(P2, Y, weight=weight).backward()
+        op.step()
+
+        self.assertTrue(teq(P1, P2))
+        self.assertFalse(teq(P, P1))
+
     def testnan(self):
         P = torch.empty((1, 2))
         Y = torch.Tensor([0]).long()
@@ -114,7 +130,7 @@ class TripletTest(TestCase):
     def testTriplet2(self):
         c = torch.randn(8, 2, requires_grad=True)
         Y = torch.LongTensor([0] * 4 + [1] * 4)
-        crit = SemiHardTripletLoss(0.3)
+        crit = WeightedExampleTripletLoss(0.3)
         op = torch.optim.Adam((c,), lr=1e-4, weight_decay=0.01)
 
         print()

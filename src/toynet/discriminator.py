@@ -1,85 +1,74 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.support import HasDiscriminator
+from common.support import HasDiscriminator, MultiBranch
 from common import freeze
+from .lossbase import HasLoss, MultiTask
 
 
-class ConsistancyDiscriminator(nn.Sequential):
+class SimpleDiscriminator(nn.Sequential, HasLoss):
     '''
     Estimate the consistency of the predicted malignant probability and BIRADs classes distirbution.
     The consistency is a float in [0, 1].
-    So if to be used in loss, use (1 - consistency).
     '''
     def __init__(self, K, hs=64):
         nn.Sequential.__init__(
-            self, 
-            nn.Linear(K + 2, hs), 
-            nn.Tanh(),
-            nn.Linear(hs, hs), 
-            nn.PReLU(),
-            nn.Linear(hs, 1), 
-            nn.Sigmoid()
+            self, nn.Linear(K + 2, hs), nn.Tanh(), nn.Linear(hs, hs), nn.PReLU(),
+            nn.Linear(hs, 1), nn.Sigmoid()
         )
-        
+
     def forward(self, Pm, Pb):
-        '''
-        Pm: [N, 2]
-        Pb: [N, K]
-        O: [N, 1]. in (0, 1)
-        '''
+        """calculate consistency of pm and pb.
+
+        Args:
+            Pm (Tensor): [N, 2]
+            Pb (Tensor): [N, K]
+
+        Returns:
+            Tensor: [N, 1]. in (0, 1)
+        """
         x = torch.cat((Pm, Pb), dim=-1)
         return nn.Sequential.forward(self, x)
 
-    def loss(self, Pm, Pb, Y):
-        '''
-        Pm: [N, 2]
-        Pb: [N, K]
-        Y: [N, 1]
-        '''
-        return nn.functional.mse_loss(
-            self.forward(Pm, Pb), Y
-        )
+    def __loss__(self, pm, pb, real=True, clip=0.) -> tuple:
+        r = {'cons': (c := self.forward(pm, pb))}
+        y = int(real)
+        loss = {'sd': (c.squeeze(1) - y).pow(2).clamp(min=clip)}
+        return r, loss
 
-def WithCD(ToyNet, *darg, **dkwarg):
-    sp = ToyNet.support
-    if 'discriminator' in sp: raise ValueError(str(ToyNet), 'already supports discriminator.')
-    sp = (*sp, 'discriminator')
 
-    class DiscriminatorAssembler(ToyNet, HasDiscriminator):
-        support = sp
+def WithSD(ToyNet: type[MultiTask], *darg, **dkwarg):
+    # BUG: inner-class cannot be serialized
+    class DiscriminatorAssembler(ToyNet, HasDiscriminator, MultiBranch):
         def __init__(self, *args, **argv):
             ToyNet.__init__(self, *args, **argv)
-            self.D = ConsistancyDiscriminator(self.K, *darg, **dkwarg)
-        
-        def discriminatorParameters(self):
-            return self.D.parameters()
+            self.D = SimpleDiscriminator(self.K, *darg, **dkwarg)
 
-        def discriminatorLoss(self, Pm, Pb, Ym, Yb, piter=0.):
-            N = Ym.shape[0]
-            loss1 = self.D.loss(Pm.detach(), Pb.detach(), torch.zeros(N, 1).to(Pm.device))
-            # loss2 = self.D.loss(
-            #     F.one_hot(Ym, num_classes=2).type_as(Pm), 
-            #     F.one_hot(Yb, num_classes=self.K).type_as(Pb), 
-            #     torch.ones(N, 1).to(Pm.device)
-            # )
-            # loss2 = freeze(loss2, (1 - loss2.detach()) ** 2)    # like focal
+        def branches(self):
+            return (*super().branches, 'D')
+            
+        def branch_weight(self, weight_decay: dict):
+            d = super().branch_weight(weight_decay)
+            d['D'] = self.D.parameters()
+            return d
+
+        def __loss__(self, meta, *args, reduce=True, **kwargs) -> tuple:
+            res, d = ToyNet.__loss__(meta, *args, reduce=False, **kwargs)
+
+            # BUG: `training` flag is controled by lightning
+            r, sd = self.D.__loss__(res['pm'], res['pb'], real=not self.training)
+            res |= r
+            d |= sd
+
+            if reduce: d = self.reduceLoss(d, meta['augindices'])
+            return res, d
+
+        def discriminatorLoss(self, pm, pb):
+            N = pm.shape[0]
+            loss1 = self.D.loss(
+                pm.detach(), pb.detach(),
+                torch.zeros(N, 1).to(pm.device)
+            )
             return loss1
 
-        def _loss(self, *args, **argv):
-            res, zipM, zipB, zipC = ToyNet._loss(self, *args, **argv)
-            if zipC is None: zipC = []
-            _, _, Pm, Pb = res
-            consistency = self.D.forward(Pm, Pb).mean()
-            return res, zipM, zipB, [consistency] + zipC
-
-        def lossWithResult(self, *args, **argv):
-            '''
-            return: Original result, M-branch losses, B-branch losses, consistency.
-            '''
-            res, loss, summary = ToyNet.lossWithResult(self, *args, **argv)
-            # But ToyNetV1 can constrain between the probability distributions Pm & Pb :D
-            consistency = res[3][0]
-            summary['interbranch/consistency'] = consistency.detach()
-            return res, loss + (1 - consistency), summary
     return DiscriminatorAssembler

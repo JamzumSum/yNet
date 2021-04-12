@@ -2,6 +2,8 @@ model:
   # resnet18, resnet34, resnet50, resnet101, resnet152
   model: resnet34
 
+  smooth: 0
+
 # coefficients when calculating multi-task loss
 coefficients:
   # multi-task factors
@@ -18,8 +20,9 @@ optimizer:
   - lr: 4e-3
 
 scheduler: 
-  factor: 0.9
-  patience: 4
+  - ReduceLROnPlateau
+  - factor: 0.9
+    patience: 4
 
 # trainer flag
 flag:

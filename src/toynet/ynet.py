@@ -59,7 +59,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         )
         cc = self.unet.oc
 
-        uniarg = dict(res=residual, norm=norm, atrous_num=int(multiscale))
+        uniarg = dict(res=residual, norm=norm)
         gen = ((ylevel, i) for ylevel in ylevels for i in range(ylevel))
         ylayers = []
 
@@ -105,11 +105,12 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         d = self.unet(X, segment)
 
         r = {}
-        if segment: r['seg'] = d['seg0']
+        if segment: r['seg'] = d['seg'][0]
         if not classify: return r
 
-        c = d["bottom"]
+        # 0409: detach ypath
+        c = d["bottom"].detach()
         if self.ylevel:
             c = self.ypath(c)
-        r["ft"] = self.pool(c)[..., 0, 0]      # [N, D], D = fc * 2^(ul + yl)
+        r["ft"] = self.pool(c).flatten(1)      # [N, D], D = fc * 2^(ul + yl)
         return r

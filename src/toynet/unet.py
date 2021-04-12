@@ -37,18 +37,18 @@ def norm_layer(norm: str, ndim=2):
     }[norm]
 
 
-@autoPropertyClass
 class ParallelLayers(nn.Module):
-    dim: int
-
     def __init__(self, layers: list, dim=1):
         super().__init__()
         for i, layer in enumerate(layers):
             self.add_module(f"P{i}", layer)
         self.layers = layers
+        self.dim = dim
 
     def forward(self, X):
-        return torch.cat([f(X) for f in self.layers], dim=self.dim)
+        r = [f(X) for f in self.layers]
+        if self.dim is None: return r
+        return torch.cat(r, dim=self.dim)
 
 
 class MultiScale(ChannelInference, nn.Sequential):
@@ -166,11 +166,11 @@ class UpConv(ChannelInference, nn.Sequential):
         if transConv:
             layers = [nn.ConvTranspose2d(ic, self.oc, 2, 2, bias=False)]
         else:
+            # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
+            # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
+            # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
             layers = [
                 nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-                                                                                  # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
-                                                                                  # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
-                                                                                  # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
                 nn.Conv2d(ic, ic // 2, 1, bias=bias),
             ]
         layers.append(norm_layer(norm)(self.oc))
@@ -181,7 +181,7 @@ class UpConv(ChannelInference, nn.Sequential):
 
 
 @autoPropertyClass
-class UNetWOHeader(ChannelInference):
+class BareUNet(ChannelInference):
     """
     [N, ic, H, W] -> [N, fc * 2^level, H, W], [N, fc, H, W]
     """
@@ -266,30 +266,31 @@ class UNetWOHeader(ChannelInference):
         O: [N, fc, H, W], [N, oc, H, W]
         """
         xn = [self.L1(X)]
+        L = self.level
 
-        for i in range(1, self.level + 1):
+        for i in range(1, L + 1):
             xn.append(
                 self._L(i + 1)(self._D(i)(xn[-1]))
             )                                      # [N, t * fc, H//t, W//t], t = 2^i
 
         if not expand:
-            return xn[self.level], None
+            return xn[L], None
 
-        for i in range(self.level):
+        for i in range(L):
             xn.append(
-                self._L(self.level + i + 2)(
+                self._L(L + i + 2)(
                     self._padCat(
-                        xn[self.level - i - 1],
-                        self._U(i + 1)(xn[self.level + i])
-                    )                                      # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
+                        xn[L - i - 1],
+                        self._U(i + 1)(xn[L + i]),
+                    )                              # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
                 )
             )
 
-        return xn[self.level], xn[-1]
+        return xn[L], xn[-1]
 
 
 @autoPropertyClass
-class UNet(UNetWOHeader):
+class UNet(BareUNet):
     r"""
     Add multiple parallel header along with original segment header.
     illustrate:
@@ -306,21 +307,19 @@ class UNet(UNetWOHeader):
 
     def __init__(self, ic, oc, level=4, fc=64, *, headeroc=None, **kwargs):
         super().__init__(ic, level, fc, **kwargs)
-        self.headers = [nn.Sequential(nn.Conv2d(self.fc, oc, 1), nn.Sigmoid())]
+        headers = [nn.Sequential(nn.Conv2d(fc, oc, 1), nn.Sigmoid())]
         if headeroc:
-            self.headers.extend(
-                nn.Sequential(nn.Tanh(), nn.Conv2d(self.fc, oc, 1), nn.Sigmoid())
+            headers.extend(
+                nn.Sequential(nn.Tanh(), nn.Conv2d(fc, oc, 1), nn.Sigmoid())
                 for oc in headeroc
             )
-        for i, f in enumerate(self.headers):
-            self.add_module("header %d" % (i + 1), f)
+        self.headers = ParallelLayers(headers, None)
 
     def forward(self, X, expand: bool = True) -> dict:
-        bottomx, finalx = UNetWOHeader.forward(self, X, expand)
-        r = {"bottom": bottomx}
+        bottomx, finalx = super().forward(X, expand)
+        d = {"bottom": bottomx}
         if not expand:
-            return r
+            return d
 
-        for i, f in enumerate(self.headers):
-            r[f"seg{i}"] = f(finalx)
-        return r
+        d['seg'] = self.headers(finalx)
+        return d

@@ -93,7 +93,7 @@ class FSMBase(pl.LightningModule, ABC):
         lr = op.param_groups[0]["lr"]
         if lr < 1e-8:
             return -1
-        self.log("lr", lr, True, True, True, False)
+        self.log("lr", lr, on_step=False, on_epoch=True)
 
     def on_train_epoch_start(self):
         # self.cosg.update(piter=self.piter, max_epochs=self.trainer.max_epochs)

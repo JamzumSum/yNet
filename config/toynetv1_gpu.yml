@@ -7,11 +7,10 @@ model:
   ulevel: 4
   # ypath like res34: [4, 6, 3]
   # ypath like res18: [2, 2, 2]
-  ylevels: [2, 2]
+  ylevels: [6, 3]
 
   # random affine ranges for siamese. 
   aug_conf:
-    degrees: 0
     translate: .25
     scale: 1
 
