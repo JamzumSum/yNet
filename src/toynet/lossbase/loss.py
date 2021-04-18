@@ -17,6 +17,8 @@ from common.loss import F, focal_smooth_bce, focal_smooth_ce
 from common.loss.triplet import WeightedExampleTripletLoss
 from misc import CoefficientScheduler as CSG
 
+_S2T = dict[str, torch.Tensor]
+
 __all__ = ["SiameseBase", "TripletBase", "CEBase", "MSESegBase", "IdentityBase"]
 
 
@@ -27,7 +29,7 @@ class LossBase(ABC, nn.Module):
         nn.Module.__init__(self)
         self.cmgr = cmgr
 
-    def __call__(self, *args, **kwds):
+    def __call__(self, *args, **kwds) -> _S2T:
         return super().__call__(*args, **kwds) if self.enable else {}
 
 
@@ -35,7 +37,7 @@ class IdentityBase(LossBase):
     def __init__(self, cmgr: CSG, *args, **kwargs):
         super().__init__(cmgr)
 
-    def forward(self, *args, **kwargs) -> dict:
+    def forward(self, *args, **kwargs):
         return {}
 
 

@@ -17,6 +17,7 @@ def post_script(post):
 def main():
     trainer, net, data = getTrainComponents(ToyNetTrainer, SimRes, "./config/simres.yml")
     trainer.fit(net, datamodule=data)
+
     post = trainer.paths.get("post_training", "")
     post_script(post)
 

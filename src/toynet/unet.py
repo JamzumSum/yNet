@@ -133,11 +133,9 @@ class DownConv(ChannelInference):
     """
     def __init__(self, ic, mode="maxpool"):
         """
-        mode: pooling method.
-            maxpool
-            avgpool
-            conv
-            blur    # TODO
+        Args:
+            ic ([type]): [description]
+            mode (str, optional): `maxpool`/`avgpool`/`conv`. Defaults to "maxpool".
         """
         super().__init__(ic, ic)
 

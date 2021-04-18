@@ -3,7 +3,10 @@
 yNet: A Breast Ultrasound Image Diagnosis Algorithm Based on Representation Learning with Small Samples.
 > ~~A Computer Aided Denoisis Algorithom for Classifying Breast Ultrasound Images Based on Weakly-Supervised Few Shot Learning~~
 
+---
 @import "./dashboard.md"
+
+---
 
 ## Requirements
 

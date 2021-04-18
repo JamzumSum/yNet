@@ -133,6 +133,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         if not self.enable_seg: self.seg.enable = False
         if not isenable('tm'): self.triplet.enable = False
         if not self.enable_siam: self.siamese.enable = False
+        if not (self.enable_seg or self.enable_sa): self.ynet.ydetach = False
 
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)

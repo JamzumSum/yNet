@@ -1,58 +1,10 @@
+import: ./base.yml
+
 model:
   # resnet18, resnet34, resnet50, resnet101, resnet152
   model: resnet34
+  smooth: 0.1
 
-  smooth: 0
-
-# coefficients when calculating multi-task loss
-coefficients:
-  # multi-task factors
-  task:
-    pm: 1
-
-datasets:
-  BUSI: 880
-  set2: 240
-  set3: 340
-  
-optimizer:
-  - AdamW
-  - lr: 4e-3
-
-scheduler: 
-  - ReduceLROnPlateau
-  - factor: 0.9
-    patience: 4
-
-# trainer flag
-flag:
-  gpus: 0
-  min_epochs: 40
-  max_epochs: 120
-
-misc:
-  # resume training or not
-  continue: False
-  load_from: latest
-
-  lr_warmup:
-    interval: epoch
-    times: 10
-
-  # use torch checkpoint to save memory on training
-  memory_trade: True
-
-dataloader:
-  training:
-    # batchsize_k is the image num per class in a batch
-    batchsize_k: 10
-    distrib_title: Ym
-    shuffle: True
-
-  # for evaluating, validating, testing
-  validating:
-    batch_size: 16
-    
 paths:
   name: resnet
   model_dir: model/resnet/simres

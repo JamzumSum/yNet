@@ -1,6 +1,8 @@
+import: ./base.yml
+
 model:
   in_channel: 1
-  K: 6  # 2, 3, 4a, 4b, 4c, 5
+  K: 6 # 2, 3, 4a, 4b, 4c, 5
   width: 16
 
   # for (512, 512) image, unet level + ypath level <= 8
@@ -9,80 +11,19 @@ model:
   # ypath like res18: [2, 2, 2]
   ylevels: [6, 3]
 
-  # random affine ranges for siamese. 
+  # random affine ranges for siamese.
   aug_conf:
     translate: .25
     scale: 1
 
-  smooth: 0
-
-# dynamic coefficients including multi-task loss
-coefficients:
-  # margin when calculating triplet loss
-  margin: 0.3 + 0.5 * x ** 2
-
-  # multi-task factors
-  task:
-    tm: 0.5 * x ** 4
-    seg: 0.75
-    seg_aug: 0.25
-    sim: 0
-
-datasets:
-  BUSI: 880
-  set2: 240
-  set3: 340
-
-# trainer flag
-flag:
-  gpus: [3]
-  min_epochs: 40
-  max_epochs: 120
-
-misc:
-  # resume training or not
-  continue: False
-  load_from: latest
-
-  # lr warmup strategy. null as don't warmup
-  lr_warmup:
-    interval: epoch
-    times: 10
-
-  # use torch checkpoint to save memory on training
-  memory_trade: True
-
-optimizer:
-  - AdamW
-  - lr: 4e-3
-
-# LRReduceOnPlateau only
-scheduler: 
-  # - ReduceLROnPlateau
-  # - factor: 0.9
-  #   patience: 4
-  - OneCycleLR
-  - max_lr: 4e-3
-  
+  smooth: 0.1
 
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler
 branch:
-  B: 
+  B:
     optimizer: null
     scheduler: null
-      
-
-dataloader:
-  training:
-    # batchsize_k is the image num per class in a batch
-    batchsize_k: 10
-    distrib_title: Ym
-    shuffle: True
-
-  # for evaluating, validating, testing
-  validating:
-    batch_size: 16
 
 paths:
   name: ynet

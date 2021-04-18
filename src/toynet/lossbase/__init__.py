@@ -6,11 +6,12 @@ from misc import CoefficientScheduler as CSG
 from .loss import *
 
 first = lambda it: next(iter(it))
+_S2T = dict[str, torch.Tensor]
 
 
 class HasLoss(ABC):
     @abstractmethod
-    def __loss__(self, *args, **kwargs) -> tuple:
+    def __loss__(self, *args, **kwargs) -> tuple[_S2T, _S2T]:
         """[summary]
 
         Returns:
@@ -30,11 +31,11 @@ class MultiTask(HasLoss):
         "seg_aug": 'segment/mse_aug'
     }
 
-    def __init__(self, cmgr: CSG, aug_weight=0.3333) -> None:
+    def __init__(self, cmgr: CSG, aug_weight: float = 0.3333) -> None:
         self.cmgr = cmgr
         self.aug_weight = aug_weight
 
-    def multiTaskLoss(self, loss: dict) -> torch.Tensor:
+    def multiTaskLoss(self, loss: _S2T) -> torch.Tensor:
         """cal multi-task loss with coefficients specified by cmgr.
 
         Returns:
@@ -47,7 +48,7 @@ class MultiTask(HasLoss):
         return self.multiTaskLoss(loss)
 
     @staticmethod
-    def lossSummary(loss: dict) -> dict:
+    def lossSummary(loss: _S2T) -> _S2T:
         """return loss summary with detached tensors.
 
         Args:
@@ -61,7 +62,7 @@ class MultiTask(HasLoss):
             for k, v in MultiTask.itemdic.items() if k in loss
         }
 
-    def reduceLoss(self, loss: dict, aug_indices: list) -> dict:
+    def reduceLoss(self, loss: _S2T, aug_indices: list[bool]) -> _S2T:
         """reduce batch-wise loss to a loss item according to data-wise weight of a batch.
 
         Args:

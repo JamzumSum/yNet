@@ -75,7 +75,7 @@ class TestOnline(TestCase):
         return self.ds[i]
 
     def testRandomAffine(self):
-        ra = RandomAffine(10, .1, .7)
+        ra = RandomAffine(0, .1, 1.5)
         for _ in range(20):
             d = self.randomItem()
             X, mask = ra(d['X'], d['mask'])

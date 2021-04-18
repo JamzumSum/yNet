@@ -13,21 +13,11 @@ from .unet import ConvStack2, DownConv, UNet
 
 
 class YNet(nn.Module, SegmentSupported, SelfInitialed):
-    """Generate embedding and segment of an image.
-    YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
-    D = fc * 2^(ul+yl)
-
-    Args:
-        cps (CheckpointSupport)
-        in_channel (int): input channel
-        width (int, optional): [description]. Defaults to 64.
-        ulevel (int, optional): unet level. Defaults to 4.
-        ylevels (list, optional): [description]. Defaults to None.
-        residual (bool, optional): use res-block as base unit. Defaults to True.
-        zero_init_residual (bool, optional): init residual path as 0. Defaults to True.
-        norm (str, optional): [description]. Defaults to "batchnorm".
-        multiscale (bool, int, optional): atrous layer num. Defaults to False(0).
     """
+    Generate embedding and segment of an image.
+    """
+    ydetach = True
+
     def __init__(
         self,
         cps: CheckpointSupport,
@@ -41,6 +31,21 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         norm="batchnorm",
         multiscale=False,
     ):
+        """
+        YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
+        D = fc * 2^(ul+yl)
+
+        Args:
+            cps (CheckpointSupport)
+            in_channel (int): input channel
+            width (int, optional): [description]. Defaults to 64.
+            ulevel (int, optional): unet level. Defaults to 4.
+            ylevels (list, optional): [description]. Defaults to None.
+            residual (bool, optional): use res-block as base unit. Defaults to True.
+            zero_init_residual (bool, optional): init residual path as 0. Defaults to True.
+            norm (str, optional): [description]. Defaults to "batchnorm".
+            multiscale (bool, int, optional): atrous layer num. Defaults to False(0).
+        """
         nn.Module.__init__(self)
 
         if ylevels is None:
@@ -108,8 +113,8 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         if segment: r['seg'] = d['seg'][0]
         if not classify: return r
 
-        # 0409: detach ypath
-        c = d["bottom"].detach()
+        c = d["bottom"]
+        if self.ydetach: c = c.detach()
         if self.ylevel:
             c = self.ypath(c)
         r["ft"] = self.pool(c).flatten(1)      # [N, D], D = fc * 2^(ul + yl)

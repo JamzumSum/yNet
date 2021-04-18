@@ -63,7 +63,7 @@ def gray2JET(x, thresh=0.5):
     G = torch.sum(torch.stack(G) * cond, dim=0)
     R = torch.sum(torch.stack(R) * cond, dim=0)
     O = torch.stack([R, G, B], dim=-3) / 255
-    return unsqueeze_as(x > thresh * 255, O, 1) * O
+    return unsqueeze_as(x >= thresh * 255, O, 1) * O
 
 
 def morph_close(X, kernel=3, iteration=1):

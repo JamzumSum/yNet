@@ -1,0 +1,59 @@
+# dynamic coefficients including multi-task loss
+coefficients:
+  # margin when calculating triplet loss
+  margin: 0.3 # + 0.5 * x ** 2
+
+  # multi-task factors
+  task:
+    tm: 0.5 * x ** 4
+    seg: 0
+    seg_aug: 0
+    sim: 0
+
+datasets:
+  BUSI: 880
+  set2: 240
+  set3: 340
+
+# trainer flag
+flag:
+  gpus: [3]
+  min_epochs: 40
+  max_epochs: 120
+
+misc:
+  # resume training or not
+  continue: False
+  load_from: latest
+
+  # lr warmup strategy. null as don't warmup
+  lr_warmup:
+    interval: epoch
+    times: 10
+
+  # use torch checkpoint to save memory on training
+  memory_trade: True
+
+optimizer:
+  - AdamW
+  - lr: 4e-3
+
+# LRReduceOnPlateau only
+scheduler: 
+  # - ReduceLROnPlateau
+  # - factor: 0.9
+  #   patience: 4
+  - OneCycleLR
+  - max_lr: 4e-3
+      
+
+dataloader:
+  training:
+    # batchsize_k is the image num per class in a batch
+    batchsize_k: 10
+    distrib_title: Ym
+    shuffle: True
+
+  # for evaluating, validating, testing
+  validating:
+    batch_size: 16
