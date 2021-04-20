@@ -51,43 +51,6 @@ class ParallelLayers(nn.Module):
         return torch.cat(r, dim=self.dim)
 
 
-class MultiScale(ChannelInference, nn.Sequential):
-    """
-    Multi-scale module by using parallel conv with various dilation rate. 
-    If atrous_num=0, it degenerates to a usual conv3x3.
-
-    NOTE: There should be a conv before this layer according to oridinal implementation.
-    """
-    def __init__(self, ic, oc, fc=None, atrous_num=1, bias=True):
-        if atrous_num:
-            if fc is None:
-                fc = self._auto_fc(oc, atrous_num)
-            atrous_layer = [nn.Conv2d(ic, fc, 3, 1, 1)]
-            for i in range(1, atrous_num + 1):
-                atrous_layer.append(nn.Conv2d(ic, fc, 3, 1, i, i))
-
-            conv_ic = fc * (atrous_num + 1)
-        else:
-            conv_ic = ic
-
-        ChannelInference.__init__(self, ic, oc)
-        nn.Sequential.__init__(
-            self,
-            ParallelLayers(atrous_layer) if atrous_num else nn.Identity(),
-            nn.Conv2d(conv_ic, oc, 3, 1, 1, bias=bias),
-        )
-
-    def forward(self, X):
-        return nn.Sequential.forward(self, X)
-
-    @staticmethod
-    def _auto_fc(oc, atrous_num):
-        return (
-            oc // (atrous_num + 1) if oc % (atrous_num + 1) == 0 else oc // 2 if oc
-            & 1 == 0 else oc
-        )
-
-
 @autoPropertyClass
 class ConvStack2(ChannelInference):
     """
@@ -96,7 +59,7 @@ class ConvStack2(ChannelInference):
 
     res: bool
 
-    def __init__(self, ic, oc, *, res=False, norm="batchnorm", atrous_num=0):
+    def __init__(self, ic, oc, *, res=False, norm="batchnorm"):
         super().__init__(ic, oc)
 
         # nonlinear = Swish if ic < oc else nn.ReLU
@@ -109,7 +72,7 @@ class ConvStack2(ChannelInference):
             nonlinear(),
         )
         self.CB = nn.Sequential(
-            MultiScale(oc, oc, None, atrous_num, bias),
+            nn.Conv2d(oc, oc, 3, 1, 1, bias=bias),
             norm_layer(norm)(oc)
         )
         if res:
@@ -197,7 +160,6 @@ class BareUNet(ChannelInference):
         cps=None,
         residual=False,
         norm='batchnorm',
-        multiscale=False,
         transConv=False
     ):
         super().__init__(ic, fc * 2 ** level)
@@ -212,7 +174,6 @@ class BareUNet(ChannelInference):
                 cc * 2,
                 res=residual,
                 norm=norm,
-                atrous_num=max(1, level - i) if multiscale else 0,
             )
             cc = conv.oc
             self.add_module("D%d" % (i + 1), dsample)

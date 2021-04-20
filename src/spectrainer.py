@@ -8,7 +8,9 @@ from warnings import warn
 
 import torch
 import torch.nn.functional as F
+from omegaconf import DictConfig, ListConfig
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
+from torchmetrics.functional import accuracy
 
 from common import deep_collate, unsqueeze_as
 from common.loss import diceCoefficient
@@ -16,12 +18,12 @@ from common.optimizer import (
     get_arg_default, get_need_decay, getBranchScheduler, no_decay, split_upto_decay
 )
 from common.support import *
-from common.trainer.fsm import DictConfig, FSMBase, ListConfig, pl
+from common.trainer.fsm import FSMBase
 from common.utils import gray2JET
-import misc
 from misc.decorators import noexcept
 from misc.updatedict import shallow_update
 from toynet.lossbase import MultiTask
+from toynet.toynetv1 import ToyNetV1
 
 
 def getPLSchedulerDict(sg, monitor=None):
@@ -46,11 +48,11 @@ def getPLSchedulerDict(sg, monitor=None):
 
 
 class ToyNetTrainer(FSMBase):
+    Net = ToyNetV1
     net: MultiTask
 
     def __init__(
         self,
-        Net,
         model_conf: DictConfig,
         coeff_conf: DictConfig,
         misc: DictConfig,
@@ -59,7 +61,7 @@ class ToyNetTrainer(FSMBase):
         branch_conf: DictConfig,
     ):
         self.branch_conf = branch_conf
-        super().__init__(Net, model_conf, coeff_conf, misc, op_conf, sg_conf)
+        super().__init__(model_conf, coeff_conf, misc, op_conf, sg_conf)
 
         self.flood = self.misc.get("flood", 0)
         self.scoring_log_image_epoch_train = -1
@@ -69,7 +71,6 @@ class ToyNetTrainer(FSMBase):
         self.logSegmap = isinstance(self.net, SegmentSupported)
 
         self.example_input_array = torch.randn((2, 1, 512, 512))
-        self.acc = pl.metrics.Accuracy()
 
     def save_hyperparameters(self):
         super().save_hyperparameters(branch=self.branch_conf)
@@ -275,8 +276,7 @@ class ToyNetTrainer(FSMBase):
                 if y not in res: continue
                 p, y = res[p], res[y]
 
-                err = 1 - self.acc(p, y)
-                self.acc.reset()
+                err = 1 - accuracy(p, y)
                 self.log(f"err/{k}/{caption}", err, logger=True)
 
                 if p.dim() == 2 and p.size(1) <= 2:
@@ -315,16 +315,24 @@ class ToyNetTrainer(FSMBase):
                 f"{caption}/segment", heatmap(X, seg), self.current_epoch
             )
 
+    @noexcept
     def test_step(self, batch, batch_idx, dataloader_idx=0):
-        X, ym, yb, detail = batch["X"], batch["Ym"], batch["Yb"], batch["meta"]
-        r = self.net(X, segment=False)
-        pm, pb = r['pm'], r['pb']
+        X, ym, detail = batch["X"], batch["Ym"], batch["meta"]
+        extra = {}
+        if issubclass(self.Net, SegmentSupported):
+            extra['segment'] = False
+        r: dict = self.net(X, **extra)
 
-        for meta, pmi, ymi, pbi, ybi in zip(detail, pm, ym, pb, yb):
+        null = [None] * X.size(0)
+        pb = r.get('pb', null)
+        yb = batch.get('Yb', null)
+        if yb is None: yb = null
+
+        for meta, pmi, ymi, pbi, ybi in zip(detail, r['pm'], ym, pb, yb):
             self.logger.log_metrics(
                 meta,
-                pm=pmi.tolist(),
-                pb=pbi.tolist(),
+                pm=pmi[1].item(),
+                pb=pbi.tolist() if pbi else None,
                 ym=ymi.item(),
-                yb=ybi.item(),
+                yb=ybi.item() if ybi else None,
             )

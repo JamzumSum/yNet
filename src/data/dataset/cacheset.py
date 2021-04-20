@@ -2,6 +2,8 @@ from . import *
 
 
 class DataMeta:
+    pid: str
+    aug: str
     __slots__ = "pid", "batchflag", "aug"
 
     def __init__(self, **kwargs):

@@ -1,15 +1,13 @@
-import os
-
+from baseline.resnet import SimRes
+from common.trainer import getTestComponents
 from spectrainer import ToyNetTrainer
-from common.trainer import Trainer, getTestComponents
 from toynet.toynetv1 import ToyNetV1
-from common.trainer import getConfig
 
 
 def main():
     # for capability when spawn start
     trainer, net, data = getTestComponents(
-        ToyNetTrainer, ToyNetV1, "./config/toynetv1.yml"
+        ToyNetTrainer, SimRes, "./config/simres.yml"
     )
     trainer.test(net, datamodule=data)
 

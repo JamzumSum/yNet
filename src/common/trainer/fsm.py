@@ -1,14 +1,12 @@
 import inspect
-import os
-from abc import ABC, abstractclassmethod
+from abc import ABC
 from collections import defaultdict
-from datetime import date
-import omegaconf
 
 import pytorch_lightning as pl
 import torch
-from misc import CoefficientScheduler, CheckpointSupport
+from misc import CheckpointSupport, CoefficientScheduler
 from omegaconf import DictConfig, ListConfig, OmegaConf
+from torch import nn
 
 
 def splitNameConf(conf, search, default_name: str = None):
@@ -19,9 +17,10 @@ def splitNameConf(conf, search, default_name: str = None):
 
 
 class FSMBase(pl.LightningModule, ABC):
+    Net: type[nn.Module]
+
     def __init__(
         self,
-        Net,
         model_conf: DictConfig,
         coeff_conf: DictConfig,
         misc: DictConfig,
@@ -29,10 +28,7 @@ class FSMBase(pl.LightningModule, ABC):
         sg_conf: DictConfig,
     ):
         # UPSTREAM BUG: pl.LightningModule.__init__(self) failed with hparam saving...
-        # TODO: save hparam
         super().__init__()
-
-        self.cls_name = Net.__name__
 
         self.misc = misc
         self.model_conf = model_conf
@@ -43,7 +39,7 @@ class FSMBase(pl.LightningModule, ABC):
         self.cosg = CoefficientScheduler(coeff_conf, {"piter": "x", "max_epochs": "M"})
         self.cosg.update(piter=0)
 
-        self.net = Net(
+        self.net = self.Net(
             cmgr=self.cosg,
             cps=CheckpointSupport(misc.get('memory_trade', False)),
             **model_conf
@@ -67,6 +63,10 @@ class FSMBase(pl.LightningModule, ABC):
             self.logger.experiment.add_histogram(
                 "network/" + name, p, self.current_epoch
             )
+
+    @property
+    def cls_name(self):
+        return self.Net.__name__
 
     @property
     def piter(self):

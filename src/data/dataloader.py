@@ -6,8 +6,9 @@ import torch
 import torch.multiprocessing as mp
 from common import deep_collate
 from common.support import DeviceAwareness
-from torch.utils.data import (BatchSampler, ConcatDataset, DataLoader,
-                              RandomSampler, Sampler, SequentialSampler)
+from torch.utils.data import (
+    BatchSampler, ConcatDataset, DataLoader, RandomSampler, Sampler, SequentialSampler
+)
 
 from data.dataset import Distributed
 
@@ -35,7 +36,11 @@ class ChainSubsetRandomSampler(Sampler[int]):
         if not all(isinstance(i, dict) for i in meta.values()) or len(meta) == 1:
             return [CumulativeRandomSampler(start, dataset)]
 
-        hashf = lambda m: (m["shape"], "Yb" in m["title"], "mask" in m["title"],)
+        hashf = lambda m: (
+            m["shape"],
+            "Yb" in m["title"],
+            "mask" in m["title"],
+        )
         # dataset: ConcatDataset
         if len(set(hashf(i) for i in meta.values())) == 1:
             return [CumulativeRandomSampler(start, dataset)]
@@ -63,7 +68,6 @@ class DistributedSampler(BatchSampler, DeviceAwareness):
     The final batchsize is `batch_size * k`.
     Samples of the same class will be arranged continuously.
     """
-
     def __init__(
         self,
         dataset: Distributed,
@@ -113,7 +117,7 @@ class DistributedSampler(BatchSampler, DeviceAwareness):
         return self._l
 
 
-def fixCollate(x):
+def fixCollate(x, pass_pid=False):
     """
     1. make sure only one shape and annotation type in the batch.
     2. add a meta of the batch.
@@ -135,6 +139,7 @@ def fixCollate(x):
         'balanced': True,
         'augindices': tuple(i.augmented for i in metas)
     }
+    if pass_pid: x['meta'] = metas
     return x
 
 
@@ -176,6 +181,7 @@ class FixLoader(DataLoader, DeviceAwareness):
         drop_last=False,
         device=None,
         spawn=False,
+        pass_pid=False,
         **otherconf
     ):
         if spawn:
@@ -189,7 +195,7 @@ class FixLoader(DataLoader, DeviceAwareness):
             **otherconf,
             pin_memory=False,
             drop_last=drop_last,
-            collate_fn=fixCollate,
+            collate_fn=lambda x: fixCollate(x, pass_pid),
             sampler=sampler_cls(dataset),
             num_workers=mp.cpu_count() if spawn else 0,
         )

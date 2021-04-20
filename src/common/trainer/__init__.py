@@ -6,21 +6,22 @@ A universial trainer ready to be inherited.
 """
 import os
 from datetime import date
-from typing import Type
 
 import pytorch_lightning as pl
 import torch
-from common.trainer.testlogger import TestLogger
 from data.plsupport import DPLSet
 from omegaconf import DictConfig, ListConfig, OmegaConf
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+from torch import nn
 
+from .fsm import FSMBase
 from .richbar import RichProgressBar
+from .testlogger import TestLogger
 
 
 class Trainer(pl.Trainer):
-    def __init__(self, misc, paths, flag, *, logger=None):
+    def __init__(self, misc, paths, flag, *, logger_stage=None):
         self.misc = misc
         self.paths = paths
         self.name = paths.get("name", "default")
@@ -30,20 +31,20 @@ class Trainer(pl.Trainer):
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
             default_root_dir=checkpoint_callback.dirpath,
-            logger=self._getTensorBoardLogger(logger),
+            logger=self._getLogger(logger_stage),
             num_sanity_val_steps=0,
             terminate_on_nan=True,
             log_every_n_steps=10,
             **flag
         )
 
-    def _getTensorBoardLogger(self, logger=None):
+    def _getLogger(self, stage=None):
         log_dir = self.paths.get("log_dir", os.path.join("log", self.name)).format(
             date=date.today().strftime("%m%d")
         )
         return TestLogger(
             log_dir, self.name, add={}
-        ) if logger == 'test' else TensorBoardLogger(
+        ) if stage == 'test' else TensorBoardLogger(
             log_dir, self.name, log_graph=True, default_hp_metric=False
         )
 
@@ -65,10 +66,10 @@ class Trainer(pl.Trainer):
         return checkpoint_callback
 
 
-def getConfig(path) -> DictConfig:
+def getConfig(path: str) -> DictConfig:
     d = OmegaConf.load(path)
     if "import" not in d: return d
-    
+
     imp = d.pop("import")
     if isinstance(imp, str):
         imp = [imp]
@@ -90,29 +91,22 @@ def gpus2device(gpus):
         raise TypeError(gpus)
 
 
-def getTrainComponents(FSM, Net, conf_path, logger=None):
-    """
-    Given the config in all, construct 3 key components for training, 
+def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
+    """Given the config in all, construct 3 key components for training, 
     which are all initialed with minimal config sections.
 
-    return:
-        Trainer
-        LightningModule
+    Args:
+        FSM (type[FSMBase]): [description]
+        Net (type[Module]): [description]
+        conf_path (str): [description]
+
+    Returns:
+        Trainer,
+        LightningModule,
         LightningDataModule
     """
     conf = getConfig(conf_path)
-    trainer = Trainer(conf.misc, conf.paths, conf.flag, logger=logger)
-    device = gpus2device(trainer.gpus)
-
-    datamodule = DPLSet(
-        conf.dataloader, conf.datasets, 'Ym', (8, 2), conf.misc.get("augment", None),
-        device
-    )
-    datamodule.prepare_data()
-    datamodule.setup()
-
     kwargs = dict(
-        Net=Net,
         model_conf=conf.model,
         coeff_conf=conf.coefficients,
         misc=conf.misc,
@@ -120,7 +114,9 @@ def getTrainComponents(FSM, Net, conf_path, logger=None):
         sg_conf=conf.scheduler,
         branch_conf=conf.get('branch', {}),
     )
+    FSM.Net = Net
     net = FSM(**kwargs)
+    trainer = Trainer(conf.misc, conf.paths, conf.flag)
 
     if conf.misc.get("continue", True):
         model_dir = trainer.default_root_dir
@@ -131,22 +127,23 @@ def getTrainComponents(FSM, Net, conf_path, logger=None):
         net.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
         net.hparams = conf
 
-    net.score_caption = datamodule.score_caption
     pl.utilities.seed.seed_everything(net.seed)
+
+    device = gpus2device(trainer.gpus)
+    datamodule = DPLSet(
+        conf.dataloader, conf.datasets, 'Ym', (8, 2), conf.misc.get("augment", None),
+        device
+    )
+    datamodule.prepare_data()
+    datamodule.setup()
+    net.score_caption = datamodule.score_caption
 
     return trainer, net, datamodule
 
 
-def getTestComponents(FSM, Net, conf_path):
+def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
     conf = getConfig(conf_path)
-    trainer = Trainer(conf.misc, conf.paths, conf.flag, logger='test')
-    device = gpus2device(trainer.gpus)
-
-    datamodule = DPLSet(conf.dataloader, conf.datasets, 'Ym', device=device)
-    datamodule.prepare_data()
-
     kwargs = dict(
-        Net=Net,
         model_conf=conf.model,
         coeff_conf=conf.coefficients,
         misc=conf.misc,
@@ -154,11 +151,19 @@ def getTestComponents(FSM, Net, conf_path):
         sg_conf=conf.scheduler,
         branch_conf=conf.branch,
     )
+    FSM.Net = Net
     net = FSM(**kwargs)
 
+    trainer = Trainer(conf.misc, conf.paths, conf.flag, logger_stage='test')
     model_dir = trainer.default_root_dir
     path = os.path.join(model_dir, "best.pt")
     net = net.load_from_checkpoint(path, **kwargs)
     pl.utilities.seed.seed_everything(net.seed)
+
+    device = gpus2device(trainer.gpus)
+
+    datamodule = DPLSet(conf.dataloader, conf.datasets, 'Ym', device=device)
+    datamodule.prepare_data()
+    datamodule.setup()
 
     return trainer, net, datamodule

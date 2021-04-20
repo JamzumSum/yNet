@@ -1,13 +1,20 @@
+model:
+  aug_conf:
+    translate: .25
+    scale: 1
+
+  smooth: 0
+
 # dynamic coefficients including multi-task loss
 coefficients:
   # margin when calculating triplet loss
-  margin: 0.3 # + 0.5 * x ** 2
+  margin: 0.3 + 0.5 * x ** 2
 
   # multi-task factors
   task:
     tm: 0.5 * x ** 4
-    seg: 0
-    seg_aug: 0
+    seg: 0.75
+    seg_aug: 0.25
     sim: 0
 
 datasets:
@@ -39,13 +46,12 @@ optimizer:
   - lr: 4e-3
 
 # LRReduceOnPlateau only
-scheduler: 
-  # - ReduceLROnPlateau
-  # - factor: 0.9
-  #   patience: 4
-  - OneCycleLR
-  - max_lr: 4e-3
-      
+scheduler:
+  - ReduceLROnPlateau
+  - factor: 0.9
+    patience: 4
+  # - OneCycleLR
+  # - max_lr: 4e-3
 
 dataloader:
   training:

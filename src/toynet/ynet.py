@@ -29,7 +29,6 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         residual=True,
         zero_init_residual=True,
         norm="batchnorm",
-        multiscale=False,
     ):
         """
         YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
@@ -60,7 +59,6 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
             cps=cps,
             residual=residual,
             norm=norm,
-            multiscale=multiscale,
         )
         cc = self.unet.oc
 

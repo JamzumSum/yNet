@@ -2,6 +2,7 @@ import torch.nn as nn
 import torchvision.models.resnet as resnet
 from common.optimizer import get_need_decay, split_upto_decay
 from common.support import MultiBranch
+from data.augment.online import RandomAffine
 from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
 from torch import Tensor
@@ -33,18 +34,28 @@ class SimBack(nn.Module, MultiTask):
         cps: CPS,
         model: str,
         *,
+        aug_conf=None,
         aug_weight=0.3333,
         zdim=2048,
         smooth=0.
     ):
         nn.Module.__init__(self)
         MultiTask.__init__(self, cmgr, aug_weight)
+        self.cps = cps
+
         self.sigma = nn.Softmax(dim=1)
         self.mbranch = self.getBackbone(model, 2)
         self.bn = nn.BatchNorm1d(self._getFC().in_features)
         self.fi_mhook = self.fiHook(self.bn)
 
-        self.cps = cps
+        # online augment
+        if aug_conf is None: aug_conf = {}
+        self.aug = RandomAffine(
+            0,
+            aug_conf.get('translate', .2),
+            aug_conf.get('scale', (0.8, 1.1)),
+        )
+
         self.ce = CEBase(cmgr, smooth)
         self.triplet = TripletBase(cmgr, True)
         self.siamese = SiameseBase(cmgr, self._getFC().in_features, zdim)
@@ -90,7 +101,7 @@ class SimBack(nn.Module, MultiTask):
         r = self.forward(X, logit=True)
         if self.enable_siam:
             aX = self.aug(X)
-            r2 = self.ynet(aX, logit=True)
+            r2 = self.forward(aX, logit=True)
 
         loss = self.ce(r['lm'], None, Ym, None)
 

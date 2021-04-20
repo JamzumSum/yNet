@@ -6,11 +6,12 @@ from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.loggers.base import rank_zero_experiment
 from pytorch_lightning.utilities import rank_zero_only
 
+from data.dataset.cacheset import DataMeta
+
 
 class TestLogger(LightningLoggerBase):
-    def __init__(self, save_dir, name='default', prefix='', add: dict=None):
+    def __init__(self, save_dir, name='default', prefix='', add: dict = None):
         super().__init__()
-        self.add = add
         self.f = os.path.join(save_dir, name, prefix + 'test_raw.yml')
         self._d = {}
 
@@ -26,10 +27,7 @@ class TestLogger(LightningLoggerBase):
 
     @rank_zero_only
     def log_hyperparams(self, params):
-        # params is an argparse.Namespace
-        # your code to record hyperparameters goes here
-        assert isinstance(params, dict)
-        self.add = params.copy()
+        pass
 
     @property
     def version(self):
@@ -41,15 +39,23 @@ class TestLogger(LightningLoggerBase):
         # If you implement this, remember to call `super().save()`
         # at the start of the method (important for aggregation of metrics)
         super().save()
+        os.makedirs(os.path.dirname(self.f), exist_ok=True)
         with open(self.f, 'w') as f:
-            if self.add:
-                yaml.safe_dump_all((self.add, self._d), f)
-            else:
-                yaml.safe_dump_all(({}, self._d), f)
+            yaml.safe_dump(self._d, f)
+        self._d.clear()
 
     @rank_zero_only
-    def log_metrics(self, meta, **raw):
+    def finalize(self, status):
+        # Optional. Any code that needs to be run after training
+        # finishes goes here
+        self.save()
+
+    @rank_zero_only
+    def log_metrics(self, meta: DataMeta, **raw):
         # metrics is a dictionary of metric names and values
         # your code to record metrics goes here
-        raw['meta'] = meta
+        raw['pid'] = meta.pid
         self._d[meta.pid] = raw
+
+    def __del__(self):
+        if self._d: self.save()

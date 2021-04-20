@@ -62,6 +62,6 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
 
     def test_dataloader(self):
         return FixLoader(
-            self._ad, **self.conf.get("validating", {}), device=self.device
+            self._vd, pass_pid=True, **self.conf.get("validating", {}), device=self.device
         )
 
