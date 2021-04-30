@@ -29,6 +29,8 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         residual=True,
         zero_init_residual=True,
         norm="batchnorm",
+        antialias=True,
+        **kwargs,
     ):
         """
         YNet: image[N, 1, H, W] ->  segment[N, 1, H, W], embedding[N, D], 
@@ -42,8 +44,8 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
             ylevels (list, optional): [description]. Defaults to None.
             residual (bool, optional): use res-block as base unit. Defaults to True.
             zero_init_residual (bool, optional): init residual path as 0. Defaults to True.
-            norm (str, optional): [description]. Defaults to "batchnorm".
-            multiscale (bool, int, optional): atrous layer num. Defaults to False(0).
+            norm (str, optional): norm layer. Defaults to "batchnorm".
+            antialias (bool, optional): whether to use blur pooling.   
         """
         nn.Module.__init__(self)
 
@@ -59,6 +61,8 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
             cps=cps,
             residual=residual,
             norm=norm,
+            antialias=antialias,
+            **kwargs
         )
         cc = self.unet.oc
 
@@ -71,7 +75,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
                 ylayers.append(cps(ConvStack2(cc, cc, **uniarg)))
             else:
                 ylayers.append(cps(ConvStack2(cc, 2 * cc, **uniarg)))
-                ylayers.append(DownConv(2 * cc))
+                ylayers.append(DownConv(2 * cc, blur=antialias))
             cc = ylayers[-1].oc
         self.yoc = cc
         self.ypath = nn.Sequential(*ylayers)
@@ -112,8 +116,11 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         if not classify: return r
 
         c = d["bottom"]
-        if self.ydetach: c = c.detach()
+        cd = c.detach()
         if self.ylevel:
             c = self.ypath(c)
+            cd = self.ypath(cd)
+
         r["ft"] = self.pool(c).flatten(1)      # [N, D], D = fc * 2^(ul + yl)
+        r["ft_d"] = self.pool(cd).flatten(1)
         return r

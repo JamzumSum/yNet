@@ -11,12 +11,8 @@ model:
   # ypath like res18: [2, 2, 2]
   ylevels: [6, 3]
 
-  # random affine ranges for siamese.
-  aug_conf:
-    translate: .25
-    scale: 1
-
-  smooth: 0.1
+  # use anti-alias pooling when downsampling
+  antialias: True
 
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler

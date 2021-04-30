@@ -6,9 +6,11 @@ A torch implement for U-Net.
 * author: JamzumSum
 * create: 2021-1-11
 """
+from functools import partial
 import torch
 import torch.nn as nn
-from common.layers import Swish
+import torch.nn.functional as F
+from common.layers import BlurPool, MaxBlurPool2d, Swish
 from common.support import SelfInitialed
 from misc import CheckpointSupport
 from misc.decorators import autoPropertyClass
@@ -59,20 +61,21 @@ class ConvStack2(ChannelInference):
 
     res: bool
 
-    def __init__(self, ic, oc, *, res=False, norm="batchnorm"):
+    def __init__(self, ic, oc, *, res=False, norm="batchnorm", padding_mode='same'):
         super().__init__(ic, oc)
 
         # nonlinear = Swish if ic < oc else nn.ReLU
-        nonlinear = nn.ReLU
+        nonlinear = nn.PReLU
         bias = norm == "none"
+        self.pad = {'same': 1, 'none': 0}[padding_mode]
 
         self.CBR = nn.Sequential(
-            nn.Conv2d(ic, oc, 3, 1, 1, bias=bias),
+            nn.Conv2d(ic, oc, 3, 1, self.pad, bias=bias),
             norm_layer(norm)(oc),
             nonlinear(),
         )
         self.CB = nn.Sequential(
-            nn.Conv2d(oc, oc, 3, 1, 1, bias=bias),
+            nn.Conv2d(oc, oc, 3, 1, self.pad, bias=bias),
             norm_layer(norm)(oc)
         )
         if res:
@@ -84,7 +87,9 @@ class ConvStack2(ChannelInference):
     def forward(self, X):
         r = self.CBR(X)
         if self.res:
-            r = self.downsample(X) + self.CB(r)
+            ds = self.downsample(X)
+            if self.pad == 0: ds = ds[..., 2:-2, 2:-2]
+            r = ds + self.CB(r)
         else:
             r = self.CB(r)
         return torch.relu(r)
@@ -94,22 +99,21 @@ class DownConv(ChannelInference):
     """
     [N, C, H, W] -> [N, C, H//2, W//2]
     """
-    def __init__(self, ic, mode="maxpool"):
+    def __init__(self, ic, mode="maxpool", blur=False):
         """
         Args:
-            ic ([type]): [description]
-            mode (str, optional): `maxpool`/`avgpool`/`conv`. Defaults to "maxpool".
+            ic (int): input channel
+            mode (str, optional): `maxpool`/`avgpool`. Defaults to "maxpool".
+            blur (str, optional): `none`. blur kernel before pooling.
         """
         super().__init__(ic, ic)
 
-        class AvgConv(nn.Conv2d, SelfInitialed):
-            def __init__(self, kernel_size, stride):
-                super().__init__(ic, ic, kernel_size, stride, bias=False)
-
-            def selfInit(self):
-                torch.nn.init.constant_(self.weight, 1 / self.kernel_size[0] ** 2)
-
-        f = {"maxpool": nn.MaxPool2d, "avgpool": nn.AvgPool2d, "conv": AvgConv}[mode]
+        f = {
+            ("maxpool", False): nn.MaxPool2d,
+            ("avgpool", False): nn.AvgPool2d,
+            ('maxpool', True): partial(MaxBlurPool2d, ic=ic),
+            ('avgpool', True): partial(BlurPool, channels=ic),
+        }[(mode, blur)]
         self.pool = f(kernel_size=2, stride=2)
 
     def forward(self, X):
@@ -128,7 +132,6 @@ class UpConv(ChannelInference, nn.Sequential):
             layers = [nn.ConvTranspose2d(ic, self.oc, 2, 2, bias=False)]
         else:
             # NOTE: Since 2x2 conv cannot be aligned when the shape is odd,
-            # the kernel size here is changed to 3x3. And padding is 1 to keep the same shape.
             # 0318: conv here is mainly object to reduce channel size. Hence use a conv1x1 instead.
             layers = [
                 nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
@@ -150,6 +153,7 @@ class BareUNet(ChannelInference):
     level: int
     fc: int
     cps: CheckpointSupport
+    cat: bool
 
     def __init__(
         self,
@@ -160,64 +164,60 @@ class BareUNet(ChannelInference):
         cps=None,
         residual=False,
         norm='batchnorm',
-        transConv=False
+        transConv=False,
+        padding_mode='none',
+        antialias=True,
+        cat=True,
     ):
         super().__init__(ic, fc * 2 ** level)
-        self.L1 = ConvStack2(ic, fc, res=residual)
+        uniarg = dict(res=residual, norm=norm, padding_mode=padding_mode)
+
+        self.L1 = ConvStack2(ic, fc, **uniarg)
         cc = self.L1.oc
 
         for i in range(level):
-            dsample = DownConv(cc, "conv")
+            dsample = DownConv(cc, blur=antialias)
             cc = dsample.oc
-            conv = ConvStack2(
-                cc,
-                cc * 2,
-                res=residual,
-                norm=norm,
-            )
+            conv = ConvStack2(cc, cc * 2, **uniarg)
             cc = conv.oc
-            self.add_module("D%d" % (i + 1), dsample)
-            self.add_module("L%d" % (i + 2), conv)
+            self.add_module(f"D{i + 1}", dsample)
+            self.add_module(f"L{i + 2}", conv)
 
         for i in range(level):
             usample = UpConv(cc, norm=norm, transConv=transConv)
             cc = usample.oc
-            conv = ConvStack2(cc * 2, cc, res=residual)
+            conv = ConvStack2(cc * 2 if self.cat else cc, cc, **uniarg)
             cc = conv.oc
-            self.add_module("U%d" % (i + 1), usample)
-            self.add_module("L%d" % (i + self.level + 2), conv)
+            self.add_module(f"U{i + 1}", usample)
+            self.add_module(f"L{i + self.level + 2}", conv)
 
     def add_module(self, name, model):
         return nn.Module.add_module(self, name, self.cps(model))
 
-    @staticmethod
-    def _padCat(X, Y):
-        """Pad Y and concat with X.
+    def catoradd(self, X, Y):
+        """Crop X. Then cat X & Y or add them.
 
         Args:
-            X (Tensor): [N, C, H_max, W_max]
-            Y (Tensor): [N, C, H_min, W_min]
+            X (Tensor): [N, C, H, W]
+            Y (Tensor): [N, C, H, W]
 
         Returns:
-            Tensor: [N, C, H_max, W_max]
+            Tensor: [N, 2C, H, W] if cat, else [N, C, H, W]
         """
-        # hmax, wmax = X.shape[-2:]
-        # hmin, wmin = Y.shape[-2:]
-        # padl = (wmax - wmin) // 2
-        # padr = wmax - wmin - padl
-        # padt = (hmax - hmin) // 2
-        # padb = hmax - hmin - padt
-        # Y = torch.nn.functional.pad(Y, (padl, padr, padt, padb), 'constant')
-        return torch.cat([X, Y], dim=1)
+        top = (X.size(-2) - Y.size(-2)) // 2
+        left = (X.size(-1) - Y.size(-1)) // 2
+
+        X = X[..., top:top + Y.size(-2), left:left + Y.size(-1)]
+        return torch.cat([X, Y], dim=1) if self.cat else X + Y
 
     def _L(self, i) -> ConvStack2:
-        return self._modules["L%d" % i]
+        return self._modules[f"L{i}"]
 
     def _D(self, i) -> DownConv:
-        return self._modules["D%d" % i]
+        return self._modules[f"D{i}"]
 
     def _U(self, i) -> UpConv:
-        return self._modules["U%d" % i]
+        return self._modules[f"U{i}"]
 
     def forward(self, X, expand=True):
         """
@@ -229,8 +229,8 @@ class BareUNet(ChannelInference):
 
         for i in range(1, L + 1):
             xn.append(
-                self._L(i + 1)(self._D(i)(xn[-1]))
-            )                                      # [N, t * fc, H//t, W//t], t = 2^i
+                self._L(i + 1)(self._D(i)(xn[-1])) # [N, t * fc, H//t, W//t], t = 2^i
+            )
 
         if not expand:
             return xn[L], None
@@ -238,7 +238,7 @@ class BareUNet(ChannelInference):
         for i in range(L):
             xn.append(
                 self._L(L + i + 2)(
-                    self._padCat(
+                    self.catoradd(
                         xn[L - i - 1],
                         self._U(i + 1)(xn[L + i]),
                     )                              # [N, t*fc, H//t, W//t], t = 2^(level - i - 1)
@@ -250,8 +250,8 @@ class BareUNet(ChannelInference):
 
 @autoPropertyClass
 class UNet(BareUNet):
-    r"""
-    Add multiple parallel header along with original segment header.
+    """Add multiple parallel header along with original segment header.
+
     illustrate:
         finalx ---conv-> seg1 (original header)
                 --tanh--conv--> seg2 (additional header 1)
@@ -274,11 +274,18 @@ class UNet(BareUNet):
             )
         self.headers = ParallelLayers(headers, None)
 
+    @staticmethod
+    def padback(X, shape):
+        top = shape[-2] - X.size(-2)
+        left = shape[-1] - X.size(-1)
+
+        return F.pad(X, [left // 2, left - left // 2, top // 2, top - top // 2])
+
     def forward(self, X, expand: bool = True) -> dict:
         bottomx, finalx = super().forward(X, expand)
         d = {"bottom": bottomx}
         if not expand:
             return d
 
-        d['seg'] = self.headers(finalx)
+        d['seg'] = [self.padback(i, X.shape) for i in self.headers(finalx)]
         return d

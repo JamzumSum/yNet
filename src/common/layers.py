@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from math import ceil
 from . import swish
 
 
@@ -84,3 +85,51 @@ class MLP(nn.Sequential):
 class Swish(nn.Module):
     def forward(self, x):
         return swish(x)
+
+
+class BlurPool(nn.Module):
+    '''
+    https://github.com/adobe/antialiased-cnns/blob/d4bf038a24cb2cdeae721ccaeeb1bd0c81c8dff7/antialiased_cnns/blurpool.py#L13
+    '''
+    def __init__(self, channels, pad_type='reflect', filt_size=4, stride=2, pad_off=0):
+        super(BlurPool, self).__init__()
+        self.filt_size = filt_size
+        self.pad_off = pad_off
+
+        self.stride = stride
+        self.off = int((self.stride - 1) / 2.)
+        self.channels = channels
+
+        a = {2: [1, 1], 3: [1, 2, 1], 5: [1, 4, 6, 4, 1]}[filt_size]
+        a = torch.tensor(a, dtype=torch.float)
+
+        filt = a[:, None] @ a[None, :]
+        filt = filt / torch.sum(filt)
+        self.register_buffer('kernel', filt[None, None, :, :].repeat(channels, 1, 1, 1))
+
+        pad_sizes = [
+            int(1. * (filt_size - 1) / 2),
+            int(ceil(1. * (filt_size - 1) / 2)),
+        ]
+        pad_sizes = [i + pad_off for i in pad_sizes * 2]
+        self.pad = self.get_pad_layer(pad_type)(pad_sizes)
+
+    @staticmethod
+    def get_pad_layer(pad_type):
+        return {
+            'reflect': nn.ReflectionPad2d,
+            'replicate': nn.ReplicationPad2d,
+            'zeros': nn.ZeroPad2d,
+        }[pad_type]
+
+    def forward(self, X):
+        return F.conv2d(self.pad(X), self.kernel, stride=self.stride, groups=X.size(1))
+
+
+class MaxBlurPool2d(nn.MaxPool2d):
+    def __init__(self, ic, kernel_size, stride, blur_ker=3) -> None:
+        super().__init__(kernel_size, stride=1)
+        self.blur = BlurPool(ic, filt_size=blur_ker, stride=stride)
+
+    def forward(self, input):
+        return self.blur(super().forward(input))

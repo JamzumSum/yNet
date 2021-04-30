@@ -70,9 +70,9 @@ class BIRADsYNet(YNet, MultiBranch):
         if not classify:
             return r
 
-        ft = r["ft"]
-
-        fi = self.norm_layer(ft)   # [N, D], empirically, D >= 128
+        fi = self.norm_layer(
+            r['ft_d'] if self.ydetach else r['ft']
+        )                                          # [N, D], empirically, D >= 128
         r["fi"] = fi
 
         lm = self.mfc(fi)  # [N, 2]
