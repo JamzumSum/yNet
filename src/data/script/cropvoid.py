@@ -7,27 +7,30 @@ import yaml
 
 clearDir = lambda d: rmtree(d, ignore_errors=True) or os.makedirs(d, exist_ok=True)
 
+
 def check_annotation(path):
     DD = os.path.join(path, 'B')
     pics = os.listdir(DD)
     with open(os.path.join(path, 'labels.yml')) as f:
-        _, ans = yaml.safe_load_all(f)
+        _, yb, _ = yaml.safe_load_all(f)
         for i in pics:
-            if i[:-4] in ans: continue
+            if os.path.splitext(i)[0] in yb: continue
             DDP = os.path.join(DD, i)
             ODP = os.path.join(path, 'XPB', i)
             move(DDP, ODP)
             print(DDP, '->', ODP)
 
+
 def cropVoid(path, output):
     rmtree(os.path.join(output, 'case'), ignore_errors=True)
-    for i in ['B', 'XPB']: clearDir(os.path.join(output, i))
+    for i in ['B', 'XPB']:
+        clearDir(os.path.join(output, i))
 
     for dataset in ['benign', 'malignant']:
         DD = os.path.join(path, dataset)
         for i in os.listdir(DD):
             if not i.endswith('.jpg'): continue
-            
+
             DDP = os.path.join(DD, i)
             ODP = os.path.join(output, 'B', i)
 
@@ -47,15 +50,17 @@ def cropVoid(path, output):
             f = t = 0
             if lv.shape[0]: f = lv.max()
             if rv.shape[0]: t = rv.min()
-            if not (f + t): 
+            if not (f + t):
                 copyfile(DDP, ODP)
                 print(DDP, 'copied.')
+                continue
             if t: t += d
             else: t = v.shape[0]
 
-            rimg = img[:, f: t]
+            rimg = img[:, f:t]
             cv.imwrite(ODP, rimg)
             print(DDP, img.shape, '->', rimg.shape)
+
 
 D = './data/BIRADs/raw/'
 OD = './data/BIRADs/crafted'

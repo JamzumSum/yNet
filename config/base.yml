@@ -16,11 +16,13 @@ coefficients:
     seg: 0.75
     seg_aug: 0.25
     sim: 0
+    pb: 0.1 * x ** 4
 
 datasets:
-  BUSI: 880
+  BUSI: 820
   set2: 240
   set3: 340
+  BIRADs: 0
 
 # trainer flag
 flag:

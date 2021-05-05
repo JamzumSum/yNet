@@ -6,24 +6,26 @@ import yaml
 
 IMAGE_EXT = ['.jpg', '.bmp', '.png']
 
+
 def birad_label():
     with open('./data/BIRADs/raw/BIRADs.csv', encoding='utf8') as f:
         f.readline()
         csv = {}
         for i in f:
             k, v = i.strip().split(',')
-            if v.count('类') > 1: 
+            if v.count('类') > 1:
                 print(k, v, 'PASSED')
                 continue
             v = re.findall(r'(\d[abc]?)类?$', v)
             if len(v) > 1:
                 print(k, v, 'PASSED')
                 continue
-            elif v: csv[k] = v[0]
+            elif v:
+                csv[k] = v[0]
             else:
                 print(k, 'IGNORED')
     C = os.listdir('./data/BIRADs/raw/benign/BIRAD-2')
-    csv.update({i[:-4]: '2' for i in C})
+    csv.update({os.path.splitext(i)[0]: '2' for i in C})
     return csv
 
 
@@ -36,10 +38,11 @@ def malignant_label(folder_label: dict):
             if ext in IMAGE_EXT: mlabel[name] = label
     return mlabel
 
+
 def mask_map(datasets):
     dic = {}
     for D in datasets:
-        for i in os.listdir(D): 
+        for i in os.listdir(D):
             if os.path.isdir(os.path.join(D, i)): continue
             dic[os.path.splitext(i)[0]] = []
     for D in datasets:
@@ -50,16 +53,22 @@ def mask_map(datasets):
             dic[g.group(1)].append(os.path.join(D, i))
     return dic
 
+
 if __name__ == "__main__":
     psr = argparse.ArgumentParser()
     psr.add_argument('folder', type=str)
-    psr.add_argument('--sets', nargs='+', type=lambda s: s.split(':'), default=[('malignant', 1), ('benign', 0)])
+    psr.add_argument(
+        '--sets',
+        nargs='+',
+        type=lambda s: s.split(':'),
+        default=[('malignant', 1), ('benign', 0)]
+    )
     psr.add_argument('--title', nargs='+', type=str)
     arg = psr.parse_args()
 
     outpath = './data/%s/crafted' % arg.folder
     inpath = './data/%s/raw' % arg.folder
-    if not os.path.exists(inpath): 
+    if not os.path.exists(inpath):
         print('%s not found. Inpath set to %s.' % (inpath, outpath))
         inpath = outpath
 
@@ -74,6 +83,7 @@ if __name__ == "__main__":
         assert arg.folder == 'BUSI', 'segment mask supports BUSI only'
         dumplist[2] = mask_map(BMdic.keys())
 
-    if not all(i or i is None for i in dumplist): raise RuntimeWarning('At least an item is empty.')
+    if not all(i or i is None for i in dumplist):
+        raise RuntimeWarning('At least an item is empty.')
     with open(outpath + '/labels.yml', 'w') as f:
         yaml.safe_dump_all(dumplist, f)

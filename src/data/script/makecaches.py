@@ -91,7 +91,6 @@ def makecache(inpath, outpath, datasets: list, title: list, statTitle=None):
 if __name__ == "__main__":
     psr = argparse.ArgumentParser()
     psr.add_argument("folder", type=str)
-    psr.add_argument("--name", type=str)
     psr.add_argument("--sets", nargs="+", type=str)
     psr.add_argument("--title", nargs="+", type=str)
     psr.add_argument("--stat", nargs="+", type=str)

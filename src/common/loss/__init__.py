@@ -52,14 +52,19 @@ def focal_smooth_bce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean")
 @torch.jit.script
 def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
     # type: (Tensor, Tensor, float, float, Optional[Tensor], str) -> Tensor
-    """
-    focal ce combined with label smoothing.
-        P: [N, K] NOTE: activated, e.g. softmaxed or sigmoided.
-        Y: [N]    NOTE: int
-        gamma: that in focal loss. e.g. gamma=0 is just label smooth loss.
-        smooth: that in label smoothing. e.g. smooth=0 is just focal loss.
-    other args are like those in cross_entropy.
-    """
+    """focal ce combined with label smoothing.
+
+    Args:
+        P (Tensor): [N, K]  NOTE: NOT activated, i.e. logits
+        Y (Tensor): [N]     NOTE: long
+        gamma (float, optional): that in focal loss. e.g. gamma=0 is just label smooth loss. Defaults to 2.0.
+        smooth (float, optional): that in label smoothing. e.g. smooth=0 is just focal loss. Defaults to 0.0.
+        weight (Tensor, optional): [description]. Defaults to None.
+        reduction (str, optional): [description]. Defaults to "mean".
+
+    Returns:
+        Tensor: [description]
+    """    
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
     ce = -YK * P.log_softmax(1)    # [N, K]

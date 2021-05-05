@@ -215,7 +215,7 @@ class ToyNetTrainer(FSMBase):
         res = self.net(X)
 
         res['ym'] = Ym
-        if Yb is not None: res["yb"] = Yb
+        res["yb"] = [None] * X.size(0) if Yb is None else Yb.tolist()
 
         if mask is not None and self.logSegmap:
             res["dice"] = diceCoefficient(res['seg'], mask, reduction="none")
@@ -247,7 +247,7 @@ class ToyNetTrainer(FSMBase):
                 self.scoring_log_image_epoch_train = self.current_epoch
         return res
 
-    def score_epoch_end(self, res: list):
+    def score_epoch_end(self, results: list):
         """
         Score and evaluate the given dataset.
         """
@@ -257,9 +257,8 @@ class ToyNetTrainer(FSMBase):
             "discrim": ("cy", "cy-GT"),
         }
 
-        for dataset_idx, res in enumerate(res):
+        for res, caption in zip(results, self.score_caption):
             res = deep_collate(res)
-            caption = self.score_caption[dataset_idx]
 
             if (c := ('fi' in res and 'fi') or ('ft' in res and 'ft')):
                 self.logger.experiment.add_embedding(
@@ -275,7 +274,15 @@ class ToyNetTrainer(FSMBase):
             for k, (p, y) in items.items():
                 if y not in res: continue
                 p, y = res[p], res[y]
+                if all(i is None for i in y): continue
 
+                if isinstance(y, list):
+                    p = torch.stack([p[i] for i, v in enumerate(y) if v is not None])
+                    y = torch.tensor([v for i, v in enumerate(y) if v is not None],
+                                     dtype=torch.long,
+                                     device=p.device)
+
+                assert len(p) == len(y)
                 err = 1 - accuracy(p, y)
                 self.log(f"err/{k}/{caption}", err, logger=True)
 

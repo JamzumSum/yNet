@@ -55,20 +55,14 @@ def WithSD(ToyNet: type[MultiTask], *darg, **dkwarg):
         def __loss__(self, meta, *args, reduce=True, **kwargs) -> tuple:
             res, d = ToyNet.__loss__(meta, *args, reduce=False, **kwargs)
 
-            # BUG: `training` flag is controled by lightning
-            r, sd = self.D.__loss__(res['pm'], res['pb'], real=not self.training)
+            # NOTE: this training flag is that of the main model.
+            # Thus when ynet is training, we hope it generate real prob;
+            # When ynet is not training (discriminator is training), we hope it expose them as fake.
+            r, sd = self.D.__loss__(res['pm'], res['pb'], real=self.training)
             res |= r
             d |= sd
 
             if reduce: d = self.reduceLoss(d, meta['augindices'])
             return res, d
-
-        def discriminatorLoss(self, pm, pb):
-            N = pm.shape[0]
-            loss1 = self.D.loss(
-                pm.detach(), pb.detach(),
-                torch.zeros(N, 1).to(pm.device)
-            )
-            return loss1
 
     return DiscriminatorAssembler

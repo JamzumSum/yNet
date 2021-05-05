@@ -14,6 +14,8 @@ model:
   # use anti-alias pooling when downsampling
   antialias: True
 
+  padding_mode: same
+
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler
 branch:

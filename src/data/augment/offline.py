@@ -252,7 +252,8 @@ def augmentWith(
     return DistributedConcatSet(
         (
             augmentWith(cls, D, distrib_title, size, device, tag, *args, **argv)
-            for size, (tag, D) in zip(aim_size, dataset.taged_datasets) if size > 0
+            if size > 0 else D
+            for size, (tag, D) in zip(aim_size, dataset.taged_datasets)
         ),
         tag=[str(i) + "&aug" for i in dataset.tag],
     )

@@ -118,11 +118,11 @@ class FSMBase(pl.LightningModule, ABC):
         pass
 
     def on_validation_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-        self._score_buf[dataloader_idx].append(
-            self.score_step(
-                self.transfer_batch_to_device(batch), batch_idx, dataloader_idx
-            )
+        r = self.score_step(
+            self.transfer_batch_to_device(batch), batch_idx, dataloader_idx
         )
+        if r is None: return
+        self._score_buf[dataloader_idx].append(r)
 
     def on_validation_epoch_end(self):
         score_outs = [self._score_buf[i] for i in range(len(self._score_buf))]

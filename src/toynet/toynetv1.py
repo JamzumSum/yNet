@@ -6,6 +6,7 @@ A toy implement for classifying benign/malignant and BIRADs
 """
 import torch
 import torch.nn as nn
+from common import freeze
 from common.optimizer import get_need_decay, split_upto_decay
 from common.support import *
 from data.augment.online import RandomAffine
@@ -31,11 +32,12 @@ class BIRADsYNet(YNet, MultiBranch):
         ulevel=4,
         *,
         norm="batchnorm",
+        bnneck=True,
         **kwargs
     ):
         YNet.__init__(self, cps, in_channel, width, ulevel, norm=norm, **kwargs)
         self.sigma = nn.Softmax(dim=1)
-        self.norm_layer = nn.BatchNorm1d(self.yoc)
+        self.norm_layer = (nn.BatchNorm1d if bnneck else nn.Identity)(self.yoc)
         self.mfc = nn.Linear(self.yoc, 2)
         self.bfc = nn.Linear(self.yoc, K)
 
@@ -70,21 +72,15 @@ class BIRADsYNet(YNet, MultiBranch):
         if not classify:
             return r
 
-        fi = self.norm_layer(
-            r['ft_d'] if self.ydetach else r['ft']
-        )                                          # [N, D], empirically, D >= 128
-        r["fi"] = fi
+        fi = self.norm_layer(r['ft_d'] if self.ydetach else r['ft'])
+        r["fi"] = fi       # [N, D], empirically, D >= 128
 
-        lm = self.mfc(fi)  # [N, 2]
-        lb = self.bfc(fi)  # [N, K]
-        r["lm"] = lm
-        r["lb"] = lb
+        r["lm"] = self.mfc(fi)                 # [N, 2]
+        r["lb"] = self.bfc(freeze(fi, 1))      # [N, K]
         if logit: return r
 
-        Pm = self.sigma(lm)
-        Pb = self.sigma(lb)
-        r["pm"] = Pm
-        r["pb"] = Pb
+        r["pm"] = self.sigma(r['lm'])
+        r["pb"] = self.sigma(r['lb'])
         return r
 
 

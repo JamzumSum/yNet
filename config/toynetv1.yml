@@ -5,7 +5,7 @@ model:
 flag: 
   gpus: 0
   limit_train_batches: 1
-  limit_val_batches: 1
+  limit_val_batches: 4
   limit_test_batches: 1
 
 misc:
@@ -14,7 +14,7 @@ misc:
 dataloader:
   training:
     batchsize_k: 1
-  scoring:
+  validating:
     batch_size: 2
 
 paths:

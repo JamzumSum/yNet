@@ -1,6 +1,8 @@
 import torch
 from collections import defaultdict
 
+merge = lambda l: sum(l, [])
+
 
 @torch.jit.script
 def yes(p: float):
@@ -39,8 +41,9 @@ def deep_collate(out_ls: list, force_stack=False, filterout=None):
                 continue
             resdic[j].append(t)
     for k, v in resdic.items():
-        f = torch.stack if force_stack or v[0].dim == 0 else torch.cat
-        resdic[k] = f(v, dim=0)
+        f = (any(not torch.is_tensor(i) for i in v)
+             and merge) or ((force_stack or v[0].dim == 0) and torch.stack) or torch.cat
+        resdic[k] = f(v)
 
     if isinstance(r, dict):
         return dict(resdic)

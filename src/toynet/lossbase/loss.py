@@ -100,13 +100,7 @@ class CEBase(LossBase):
         }
         if yb is None: return d
 
-        d["pb"] = focal_smooth_ce(
-            freeze(lb, 1),                           # NOTE: lb is detached here.
-            yb,
-            gamma=self.cmgr.get("gamma_b", 'x + 1'),
-            weight=self.bweight,
-            reduction='none'
-        )
+        d["pb"] = focal_smooth_ce(lb, yb, 0, weight=self.bweight, reduction='none')
         return d
 
 
