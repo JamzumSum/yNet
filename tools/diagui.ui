@@ -24,12 +24,11 @@
        <bool>true</bool>
       </property>
       <property name="columnCount">
-       <number>6</number>
+       <number>5</number>
       </property>
       <attribute name="verticalHeaderVisible">
        <bool>true</bool>
       </attribute>
-      <column/>
       <column/>
       <column/>
       <column/>
@@ -58,20 +57,69 @@
      </property>
      <addaction name="actionThreshold"/>
     </widget>
+    <widget class="QMenu" name="menuExport">
+     <property name="title">
+      <string>Export</string>
+     </property>
+     <addaction name="actionmarkdown"/>
+    </widget>
     <addaction name="actionOpen"/>
+    <addaction name="menuExport"/>
+    <addaction name="separator"/>
     <addaction name="menuPreference"/>
    </widget>
+   <widget class="QMenu" name="menuFilter">
+    <property name="title">
+     <string>Filter</string>
+    </property>
+    <addaction name="actionFilterError"/>
+   </widget>
    <addaction name="menuFiles"/>
+   <addaction name="menuFilter"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <action name="actionOpen">
    <property name="text">
     <string>Open</string>
    </property>
+   <property name="shortcut">
+    <string>Ctrl+O</string>
+   </property>
   </action>
   <action name="actionThreshold">
    <property name="text">
     <string>Threshold</string>
+   </property>
+   <property name="toolTip">
+    <string>Change threshold of B/M</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+T</string>
+   </property>
+  </action>
+  <action name="actionFilterError">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Error only</string>
+   </property>
+   <property name="toolTip">
+    <string>Filter out items that error occurs</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+F</string>
+   </property>
+  </action>
+  <action name="actionmarkdown">
+   <property name="text">
+    <string>markdown</string>
+   </property>
+   <property name="toolTip">
+    <string>Export markdown(*.md)</string>
    </property>
   </action>
  </widget>
@@ -125,10 +173,44 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>actionFilterError</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>WndMain</receiver>
+   <slot>errorFilter(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>actionmarkdown</sender>
+   <signal>triggered()</signal>
+   <receiver>WndMain</receiver>
+   <slot>exportMarkdown()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>configOpened()</slot>
   <slot>setThreshold()</slot>
   <slot>viewPID(int,int)</slot>
+  <slot>errorFilter(bool)</slot>
+  <slot>exportMarkdown()</slot>
  </slots>
 </ui>

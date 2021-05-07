@@ -22,7 +22,10 @@ first = lambda it: next(iter(it))
 value_only = lambda d: first(d.values())
 
 
+@autoPropertyClass
 class BIRADsYNet(YNet, MultiBranch):
+    K: int
+
     def __init__(
         self,
         cps: CPS,
@@ -114,7 +117,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         )
         # loss bases
         self.triplet = TripletBase(cmgr, True)
-        self.ce = CEBase(cmgr, smooth)
+        self.ce = CEBase(cmgr, self.ynet.K, smooth)
         self.seg = MSESegBase(cmgr)
         self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
 

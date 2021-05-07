@@ -32,6 +32,7 @@ class SimBack(nn.Module, MultiTask):
         self,
         cmgr: CSG,
         cps: CPS,
+        K: int,
         model: str,
         *,
         aug_conf=None,
@@ -56,7 +57,7 @@ class SimBack(nn.Module, MultiTask):
             aug_conf.get('scale', (0.8, 1.1)),
         )
 
-        self.ce = CEBase(cmgr, smooth)
+        self.ce = CEBase(cmgr, K, smooth)
         self.triplet = TripletBase(cmgr, True)
         self.siamese = SiameseBase(cmgr, self._getFC().in_features, zdim)
 
@@ -121,7 +122,7 @@ class ParalBack(SimBack, MultiBranch):
     '''
     def __init__(self, cmgr: CSG, cps: CPS, K, model: tuple, **kwargs):
         if isinstance(model, str): model = (model, model)
-        SimBack.__init__(self, cmgr, cps, model[0], **kwargs)
+        SimBack.__init__(self, cmgr, cps, K, model[0], **kwargs)
         self.bbranch = self.getBackbone(model[1], K)
 
         isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
@@ -130,16 +131,15 @@ class ParalBack(SimBack, MultiBranch):
         assert isenable('pb')
 
     def forward(self, X, logit=False):
-        X = X.repeat(1, 3, 1, 1)   # [N, 3, H, W]
         d = SimBack.forward(self, X, logit)
-        d['lb'] = self.bbranch(X)
+        d['lb'] = self.bbranch(X.repeat(1, 3, 1, 1))
         if logit: return d
 
         d['pb'] = self.sigma(d['lb'])
         return d
 
     def __loss__(self, meta, X, Ym, Yb=None, reduce=True, *args, **argv):
-        r, loss = super().__loss__(meta, X, Ym, reduce, *args, **argv)
+        r, loss = super().__loss__(meta, X, Ym, False, *args, **argv)
         loss |= self.ce(r['lm'], r['lb'], Ym, Yb)
         if reduce: loss = self.reduceLoss(loss, meta['augindices'])
         return r, loss

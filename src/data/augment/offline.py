@@ -221,20 +221,20 @@ class ScaleAugmentSet(AugmentSet):
 
 
 def augmentWith(
-    cls,
-    dataset: Distributed,
-    distrib_title: str,
-    aim_size: int,
-    device=None,
-    tag=None,
-    *args,
-    **argv
+    cls, dataset: Distributed, aim_size: int, device=None, tag=None, *args, **argv
 ):
     meta = dataset.meta
     if not all(isinstance(i, dict) for i in meta.values()):
         if tag:
             tag = str(tag)
-        augset = cls(dataset, distrib_title, aim_size, *args, **argv, device=device)
+        augset = cls(
+            dataset,
+            'Yb' if 'Yb' in dataset.statTitle else 'Ym',
+            aim_size,
+            *args,
+            **argv,
+            device=device
+        )
         return DistributedConcatSet(
             [dataset, augset],
             tag=[tag, tag + "_aug"] if tag else None,
@@ -251,8 +251,7 @@ def augmentWith(
 
     return DistributedConcatSet(
         (
-            augmentWith(cls, D, distrib_title, size, device, tag, *args, **argv)
-            if size > 0 else D
+            augmentWith(cls, D, size, device, tag, *args, **argv) if size > 0 else D
             for size, (tag, D) in zip(aim_size, dataset.taged_datasets)
         ),
         tag=[str(i) + "&aug" for i in dataset.tag],

@@ -85,11 +85,12 @@ class TripletBase(LossBase):
 
 
 class CEBase(LossBase):
-    def __init__(self, cmgr, smooth=0.1):
+    def __init__(self, cmgr, K, smooth=0.1):
         super().__init__(cmgr)
         # TODO: weights should be set by config...
+        assert K == 3
         self.register_buffer("mweight", torch.Tensor([0.4, 0.6]))
-        self.register_buffer("bweight", torch.Tensor([0.1, 0.2, 0.2, 0.2, 0.2, 0.1]))
+        self.register_buffer("bweight", torch.Tensor([0.3, 0.2, 0.5]))
         self.smooth = smooth
 
     def forward(self, lm, lb, ym, yb=None):

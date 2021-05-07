@@ -1,9 +1,16 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from common.loss import smoothed_label
 from common.support import HasDiscriminator, MultiBranch
 from common import freeze
 from .lossbase import HasLoss, MultiTask
+
+
+def rand_smooth_label(target: torch.Tensor, smooth=0.1, K=-1) -> torch.Tensor:
+    mask = F.one_hot(target, num_classes=K).float()
+    rnd = torch.rand_like(target)
+    return mask * rnd * (1 - smooth) + (1 - mask) * rnd * smooth
 
 
 class SimpleDiscriminator(nn.Sequential, HasLoss):
@@ -33,7 +40,7 @@ class SimpleDiscriminator(nn.Sequential, HasLoss):
     def __loss__(self, pm, pb, real=True, clip=0.) -> tuple:
         r = {'cons': (c := self.forward(pm, pb))}
         y = int(real)
-        loss = {'sd': (c.squeeze(1) - y).pow(2).clamp(min=clip)}
+        loss = {'sd': (c.squeeze(1) - y).pow(2).clamp_min(clip)}
         return r, loss
 
 
@@ -46,7 +53,7 @@ def WithSD(ToyNet: type[MultiTask], *darg, **dkwarg):
 
         def branches(self):
             return (*super().branches, 'D')
-            
+
         def branch_weight(self, weight_decay: dict):
             d = super().branch_weight(weight_decay)
             d['D'] = self.D.parameters()
@@ -58,7 +65,12 @@ def WithSD(ToyNet: type[MultiTask], *darg, **dkwarg):
             # NOTE: this training flag is that of the main model.
             # Thus when ynet is training, we hope it generate real prob;
             # When ynet is not training (discriminator is training), we hope it expose them as fake.
-            r, sd = self.D.__loss__(res['pm'], res['pb'], real=self.training)
+            if self.training:
+                r, sd = self.D.__loss__(res['pm'], res['pb'], real=1)
+            else:
+                pm = rand_smooth_label(res['ym'], K=2)
+                pb = rand_smooth_label(res['yb'], K=self.K)
+                r, sd = self.D.__loss__(pm, pb, real=0)
             res |= r
             d |= sd
 

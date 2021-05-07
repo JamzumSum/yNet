@@ -4,6 +4,7 @@ A universial trainer ready to be inherited.
 * author: JamzumSum
 * create: 2021-1-12
 """
+from logging import warn
 import os
 from datetime import date
 
@@ -131,8 +132,12 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
 
     device = gpus2device(trainer.gpus)
     datamodule = DPLSet(
-        conf.dataloader, conf.datasets, 'Ym', (8, 2), conf.misc.get("augment", None),
-        device
+        conf.dataloader,
+        conf.data.datasets,
+        tv=conf.data.get('split', (8, 2)),
+        mask_prob=conf.data.get('mask_usage', 1.),
+        aug_aimsize=conf.misc.get("augment", None),
+        device=device,
     )
     datamodule.prepare_data()
     datamodule.setup()
@@ -156,13 +161,19 @@ def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
 
     trainer = Trainer(conf.misc, conf.paths, conf.flag, logger_stage='test')
     model_dir = trainer.default_root_dir
+    
     path = os.path.join(model_dir, "best.pt")
+    if not os.path.exists(path):
+        warn(f'{path} does not exist. Will use latest.pt instead.')
+        path = os.path.join(model_dir, "latest.pt")
+        assert os.path.exists(path), 'no checkpoint saved.'
+
     net = net.load_from_checkpoint(path, **kwargs)
     pl.utilities.seed.seed_everything(net.seed)
 
     device = gpus2device(trainer.gpus)
 
-    datamodule = DPLSet(conf.dataloader, conf.datasets, 'Ym', device=device)
+    datamodule = DPLSet(conf.dataloader, conf.data.datasets, device=device)
     datamodule.prepare_data()
     datamodule.setup()
 

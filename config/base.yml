@@ -18,11 +18,15 @@ coefficients:
     sim: 0
     pb: 0.1 * x ** 4
 
-datasets:
-  BUSI: 820
-  set2: 240
-  set3: 340
-  BIRADs: 0
+# configurations about datasets and splitting
+data:
+  split: [8, 2]
+  mask_usage: 1.
+  datasets:
+    BUSI: 820
+    set2: 240
+    set3: 340
+    BIRADs: 280
 
 # trainer flag
 flag:

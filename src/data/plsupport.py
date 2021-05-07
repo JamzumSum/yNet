@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
-import torch
 from common.support import DeviceAwareness
+from misc.decorators import autoPropertyClass
 from omegaconf import DictConfig
 
 from .augment.offline import ElasticAugmentSet, augmentWith
@@ -9,13 +9,18 @@ from .dataset import DistributedConcatSet, classSpecSplit
 from .dataset.cacheset import CachedDatasetGroup
 
 
+@autoPropertyClass
 class DPLSet(pl.LightningDataModule, DeviceAwareness):
+    tv: tuple[int, int]
+    mask_prob: float
+
     def __init__(
         self,
         conf,
         sets: list,
-        distrib_title: str,
+        *,
         tv=(8, 2),
+        mask_prob=1.,
         aug_aimsize=None,
         device=None,
     ):
@@ -27,15 +32,19 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
         else:
             self.sets = tuple(sets)
             self.aimsize = aug_aimsize
-        self.tv = tv
-        self.distrib_title = distrib_title
 
     def prepare_data(self):
-        datasets = [CachedDatasetGroup(f"./data/{i}", self.device) for i in self.sets]
-        self._ad = DistributedConcatSet(datasets, self.sets,)
+        datasets = [
+            CachedDatasetGroup(f"./data/{i}", self.device, self.mask_prob)
+            for i in self.sets
+        ]
+        self._ad = DistributedConcatSet(
+            datasets,
+            self.sets,
+        )
 
     def setup(self, stage=None):
-        self._td, self._vd = classSpecSplit(self._ad, *self.tv, self.distrib_title)
+        self._td, self._vd = classSpecSplit(self._ad, *self.tv, 'Ym')
         print("trainset distribution:", self._td.distribution)
         print("validation distribution:", self._vd.distribution)
         self.score_caption = ("validation", "trainset")
@@ -43,7 +52,9 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
         if self.aimsize is None:
             self._tda = None
         else:
-            self._tda = augmentWith(ElasticAugmentSet, self._td, "Ym", self.aimsize, device=self.device)
+            self._tda = augmentWith(
+                ElasticAugmentSet, self._td, self.aimsize, device=self.device
+            )
             print("augmented trainset distribution:", self._tda.distribution)
 
     def train_dataloader(self):
@@ -62,6 +73,8 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
 
     def test_dataloader(self):
         return FixLoader(
-            self._vd, pass_pid=True, **self.conf.get("validating", {}), device=self.device
+            self._vd,
+            pass_pid=True,
+            **self.conf.get("validating", {}),
+            device=self.device
         )
-

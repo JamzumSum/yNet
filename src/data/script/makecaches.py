@@ -8,7 +8,14 @@ import torch
 import yaml
 from misc.indexserial import IndexDumper
 
-BIRAD_NAME = ["2", "3", "4a", "4b", "4c", "5"]
+BIRAD_NAME = ['3', '4', '5']
+BIRAD_MAP = {
+    '3': 0,
+    '4a': 1,
+    '4b': 1,
+    '4c': 1,
+    '5': 2,
+}
 M_NAME = ["bengin", "malignant"]
 
 
@@ -40,6 +47,8 @@ def makecache(inpath, outpath, datasets: list, title: list, statTitle=None):
             assert not np.any(np.isnan(img)), DDP
             dic = shapedic[img.shape]
 
+            if 'Yb' in dic and bdic[fname] not in BIRAD_MAP: continue
+
             img = torch.from_numpy(img).unsqueeze(0)
             img = img / img.max()
             idxs.append(dumper.dump(img))
@@ -50,7 +59,7 @@ def makecache(inpath, outpath, datasets: list, title: list, statTitle=None):
             if "Ym" in dic:
                 dic["Ym"].append(mdic[fname])
             if "Yb" in dic:
-                dic["Yb"].append(BIRAD_NAME.index(bdic[fname]))
+                dic["Yb"].append(BIRAD_MAP[bdic[fname]])
             if "mask" in dic:
                 masks = []
                 for p in maskdic[fname]:
@@ -80,7 +89,10 @@ def makecache(inpath, outpath, datasets: list, title: list, statTitle=None):
             "index": idxs,
             "title": title,
             "statistic_title": statTitle,
-            "classname": {"Ym": M_NAME, "Yb": BIRAD_NAME},
+            "classname": {
+                "Ym": M_NAME,
+                "Yb": BIRAD_NAME
+            },
             "distribution": statdic,
         },
         os.path.join(outpath, "meta.pt"),
@@ -106,7 +118,6 @@ if __name__ == "__main__":
             i for i in os.listdir(inpath) if os.path.isdir(os.path.join(inpath, i))
         ]
 
-    
     dic = makecache(
         inpath, outpath, datasets, title=["X"] + arg.title, statTitle=arg.stat
     )

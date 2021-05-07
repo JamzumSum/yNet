@@ -21,9 +21,11 @@ class DataMeta:
 
 
 class CachedDataset(Distributed):
-    def __init__(self, loader, content: dict, meta):
+    def __init__(self, loader, content: dict, meta, mask_prob=1.):
         self.dics = content
         self.titles = meta["title"]
+        if 'mask' in self.titles:
+            self.mask_prob = torch.rand(len(self)) <= mask_prob
         # If meta is a dict of single item, it must be uniform for any subset of the set.
         # Otherwise meta should have multiple items. So `distribution` must be popped up here.
         self.distrib = meta.pop("distribution")
@@ -45,7 +47,7 @@ class CachedDataset(Distributed):
         item["meta"] = DataMeta(pid=item.pop("pid"), batchflag=self.meta["batchflag"])
         if self._fetch:
             item["X"] = self.loader.load(item["X"])
-            if "mask" in item:
+            if "mask" in item and self.mask_prob[i]:
                 item["mask"] = self.loader.load(item["mask"])
 
         return item
@@ -86,7 +88,7 @@ class CachedDatasetGroup(DistributedConcatSet):
     """
     Dataset for a group of cached datasets.
     """
-    def __init__(self, path, device=None, withpid=False):
+    def __init__(self, path, device=None, mask_prob=1.):
         d: dict = torch.load(os.path.join(path, "meta.pt"))
         shapedic: dict = d.pop("data")
         index: list = d.pop("index")
@@ -94,6 +96,6 @@ class CachedDatasetGroup(DistributedConcatSet):
         self.loader = IndexLoader(os.path.join(path, "images.pts"), index, device)
 
         datasets = [
-            CachedDataset(self.loader, dic, d.copy()) for dic in shapedic.values()
+            CachedDataset(self.loader, dic, d.copy(), mask_prob) for dic in shapedic.values()
         ]
         DistributedConcatSet.__init__(self, datasets, tag=shapedic.keys())

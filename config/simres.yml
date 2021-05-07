@@ -2,8 +2,12 @@ import: ./base.yml
 
 model:
   # resnet18, resnet34, resnet50, resnet101, resnet152
-  model: resnet34
-  smooth: 0.1
+  model: resnet18
+  K: 4
+  smooth: 0.
+
+flag:
+  gpus: 0
 
 paths:
   name: resnet

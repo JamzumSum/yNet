@@ -339,7 +339,7 @@ class ToyNetTrainer(FSMBase):
             self.logger.log_metrics(
                 meta,
                 pm=pmi[1].item(),
-                pb=pbi.tolist() if pbi else None,
+                pb=None if pbi is None else pbi.tolist(),
                 ym=ymi.item(),
-                yb=ybi.item() if ybi else None,
+                yb=None if ybi is None else ybi.item(),
             )

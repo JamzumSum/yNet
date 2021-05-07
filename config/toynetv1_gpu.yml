@@ -2,7 +2,7 @@ import: ./base.yml
 
 model:
   in_channel: 1
-  K: 6 # 2, 3, 4a, 4b, 4c, 5
+  K: 3 # 2, 3, 4a, 4b, 4c, 5
   width: 16
 
   # for (512, 512) image, unet level + ypath level <= 8
