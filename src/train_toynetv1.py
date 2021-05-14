@@ -1,7 +1,7 @@
 import os
 
-from spectrainer import ToyNetTrainer
 from common.trainer import getTrainComponents
+from spectrainer import ToyNetTrainer
 from toynet.toynetv1 import ToyNetV1
 
 

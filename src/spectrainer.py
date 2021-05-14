@@ -7,13 +7,13 @@ A trainer for toynets.
 from warnings import warn
 
 import torch
-import torch.nn.functional as F
+from torch import nn
 from omegaconf import DictConfig, ListConfig
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 from torchmetrics.functional import accuracy
 
 from common import deep_collate, unsqueeze_as
-from common.loss import diceCoefficient
+from common.loss import confidence, diceCoefficient
 from common.optimizer import (
     get_arg_default, get_need_decay, getBranchScheduler, no_decay, split_upto_decay
 )
@@ -53,15 +53,15 @@ class ToyNetTrainer(FSMBase):
 
     def __init__(
         self,
-        model_conf: DictConfig,
-        coeff_conf: DictConfig,
+        net: nn.Module,
+        cmgr, 
         misc: DictConfig,
         op_conf: ListConfig,
         sg_conf: DictConfig,
         branch_conf: DictConfig,
     ):
-        self.branch_conf = branch_conf
-        super().__init__(model_conf, coeff_conf, misc, op_conf, sg_conf)
+        self.branch_conf = {} if branch_conf is None else branch_conf
+        super().__init__(net, cmgr, misc, op_conf, sg_conf)
 
         self.flood = self.misc.get("flood", 0)
         self.scoring_log_image_epoch_train = -1
@@ -70,10 +70,7 @@ class ToyNetTrainer(FSMBase):
         self.adversarial = isinstance(self.net, HasDiscriminator)
         self.logSegmap = isinstance(self.net, SegmentSupported)
 
-        self.example_input_array = torch.randn((2, 1, 512, 512))
-
-    def save_hyperparameters(self):
-        super().save_hyperparameters(branch=self.branch_conf)
+        self.example_input_array = torch.zeros((2, 1, 512, 512))
 
     def forward(self, X):
         r = self.net(X)
@@ -219,6 +216,7 @@ class ToyNetTrainer(FSMBase):
 
         if mask is not None and self.logSegmap:
             res["dice"] = diceCoefficient(res['seg'], mask, reduction="none")
+            res['confidence'] = confidence(res['seg'], reduction='none')
 
         # BUGGY!
         # if self.adversarial:
@@ -247,7 +245,7 @@ class ToyNetTrainer(FSMBase):
                 self.scoring_log_image_epoch_train = self.current_epoch
         return res
 
-    def score_epoch_end(self, results: list):
+    def score_epoch_end(self, results: list[dict[str, torch.Tensor]]):
         """
         Score and evaluate the given dataset.
         """
@@ -269,7 +267,13 @@ class ToyNetTrainer(FSMBase):
                 )
 
             if "dice" in res:
-                self.log("dice/%s" % caption, res["dice"].mean(), logger=True)
+                self.log(f"segment/dice/{caption}", res["dice"].mean(), logger=True)
+            if 'confidence' in res:
+                self.log(
+                    f"segment/confidence/{caption}",
+                    res["confidence"].mean(),
+                    logger=True
+                )
 
             for k, (p, y) in items.items():
                 if y not in res: continue
@@ -303,7 +307,7 @@ class ToyNetTrainer(FSMBase):
     def log_images(self, X, dataloader_idx):
         X = X[:8]                                                                       # log only 8 images for a pretty present.
         caption = self.score_caption[dataloader_idx]
-        heatmap = lambda x, s: 0.7 * x + 0.1 * gray2JET(s, thresh=0.1)
+        heatmap = lambda x, s: 0.7 * x + 0.1 * gray2JET(s, thresh=0.15)
         if self.logHotmap:
             M, B, mw, bw = self.net(X)
             wsum = lambda x, w: (x * unsqueeze_as(w / w.sum(dim=1, keepdim=True), x)

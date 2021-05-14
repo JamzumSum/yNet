@@ -3,13 +3,14 @@ from unittest import TestCase
 
 import cv2 as cv
 import torch
-from common.utils import BoundingBoxCrop, morph_close
+from common.utils import CropUpsample, morph_close
 from data.augment import elastic, affine, getGaussianFilter
 from data.dataset.cacheset import CachedDatasetGroup
 from data.augment.online import RandomAffine
 
 gray2numpy = lambda tensor: (
-    tensor[0] if tensor.dim() == 3 else tensor if tensor.dim() == 2 else None
+    tensor[0, 0] if tensor.dim() == 4 else tensor[0] if tensor.dim() == 3 else tensor
+    if tensor.dim() == 2 else None
 ).numpy()
 show_gray_tensor = lambda title, tensor: cv.imshow(title, gray2numpy(tensor))
 
@@ -62,6 +63,7 @@ class TestAugment(TestCase):
         show_gray_tensor("scale", img)
         cv.waitKey()
 
+
 class TestOnline(TestCase):
     def setUp(self):
         self.ds = CachedDatasetGroup("data/BUSI/")
@@ -84,3 +86,45 @@ class TestOnline(TestCase):
             show_gray_tensor('affine', X)
             show_gray_tensor('mask_affine', mask)
             cv.waitKey()
+
+
+class TestCrop(TestCase):
+    def setUp(self):
+        self.ds = CachedDatasetGroup("data/BUSI/")
+
+    def randomItem(self):
+        rint = randint(0, len(self.ds))
+        print(rint)
+        return self.ds[rint]
+
+    def item(self, i=0):
+        return self.ds[i]
+
+    def testCrop(self):
+        o = self.randomItem()
+        X = o['X'].unsqueeze(0)
+        mask = o['mask'].unsqueeze(0)
+
+        crop = CropUpsample(512)
+        croped = crop.forward(mask, mask)
+
+        self.assertTrue(croped.shape == (1, 1, 512, 512))
+
+        show_gray_tensor('croped', croped)
+        show_gray_tensor('X', X)
+        show_gray_tensor('mask', mask)
+        cv.waitKey()
+
+    def testEmptyCrop(self):
+        o = self.randomItem()
+        X = o['X'].unsqueeze(0)
+        mask = torch.zeros_like(X)
+
+        crop = CropUpsample(512)
+        croped = crop.forward(X, mask)
+
+        self.assertTrue(croped.shape == (1, 1, 512, 512))
+
+        show_gray_tensor('croped', croped)
+        show_gray_tensor('X', X)
+        cv.waitKey()

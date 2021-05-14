@@ -21,8 +21,8 @@ class FSMBase(pl.LightningModule, ABC):
 
     def __init__(
         self,
-        model_conf: DictConfig,
-        coeff_conf: DictConfig,
+        net: nn.Module,
+        cmgr: CoefficientScheduler,
         misc: DictConfig,
         op_conf: OmegaConf,
         sg_conf: DictConfig,
@@ -31,31 +31,14 @@ class FSMBase(pl.LightningModule, ABC):
         super().__init__()
 
         self.misc = misc
-        self.model_conf = model_conf
         self.op_cls, self.op_conf = splitNameConf(op_conf, torch.optim, 'SGD')
         self.sg_cls, self.sg_conf = splitNameConf(sg_conf, torch.optim.lr_scheduler)
 
-        # init cmgr
-        self.cosg = CoefficientScheduler(coeff_conf, {"piter": "x", "max_epochs": "M"})
+        self.cosg = cmgr
         self.cosg.update(piter=0)
 
-        self.net = self.Net(
-            cmgr=self.cosg,
-            cps=CheckpointSupport(misc.get('memory_trade', False)),
-            **model_conf
-        )
-
-    def save_hyperparameters(self, **otherconf):
-        conf = {
-            "model": self.model_conf,
-            "misc": self.misc,
-            "optimizer": [self.op_cls.__name__, self.op_conf],
-            "scheduler": self.sg_conf,
-        }
-        conf.update(otherconf)
-        # BUG: subclass must inherit save_hyperparameters
-        frame = inspect.currentframe().f_back.f_back.f_back
-        super().save_hyperparameters(conf, frame=frame)
+        self.net = net
+        self.save_hyperparameters(ignore=['net', 'cmgr'])
 
     def traceNetwork(self):
         param = self.net.named_parameters()
@@ -111,11 +94,11 @@ class FSMBase(pl.LightningModule, ABC):
         )
         self._score_buf = defaultdict(list)
 
-    def score_step(self, batch, batch_idx, dataloader_idx=0):
-        pass
+    def score_step(self, batch, batch_idx, dataloader_idx=0) -> dict:
+        raise NotImplementedError
 
     def score_epoch_end(self, score_outs):
-        pass
+        raise NotImplementedError
 
     def on_validation_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
         r = self.score_step(

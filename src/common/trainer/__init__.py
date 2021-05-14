@@ -4,9 +4,9 @@ A universial trainer ready to be inherited.
 * author: JamzumSum
 * create: 2021-1-12
 """
-from logging import warn
 import os
 from datetime import date
+from warnings import warn
 
 import pytorch_lightning as pl
 import torch
@@ -14,7 +14,11 @@ from data.plsupport import DPLSet
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.utilities.cli import LightningCLI
 from torch import nn
+from misc import CheckpointSupport, CoefficientScheduler
+
+from spectrainer import ToyNetTrainer
 
 from .fsm import FSMBase
 from .richbar import RichProgressBar
@@ -22,7 +26,9 @@ from .testlogger import TestLogger
 
 
 class Trainer(pl.Trainer):
-    def __init__(self, misc, paths, flag, *, logger_stage=None):
+    def __init__(
+        self, misc: DictConfig, paths: dict, flag: DictConfig, *, logger_stage=None
+    ):
         self.misc = misc
         self.paths = paths
         self.name = paths.get("name", "default")
@@ -67,6 +73,20 @@ class Trainer(pl.Trainer):
         return checkpoint_callback
 
 
+class CLI(LightningCLI):
+    def before_fit(self) -> None:
+        self.model.score_caption = self.datamodule.score_caption
+
+    def after_fit(self) -> None:
+        post = self.config.paths.get("post_training", "")
+        if post and os.path.exists(post):
+            with open(post) as f:
+                # use exec here since
+                # 1. `import` will excute the script at once
+                # 2. you can modify the script when training
+                exec(compile(f.read(), post, exec))
+
+
 def getConfig(path: str) -> DictConfig:
     d = OmegaConf.load(path)
     if "import" not in d: return d
@@ -108,27 +128,27 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
     """
     conf = getConfig(conf_path)
     kwargs = dict(
-        model_conf=conf.model,
-        coeff_conf=conf.coefficients,
         misc=conf.misc,
         op_conf=conf.optimizer,
         sg_conf=conf.scheduler,
-        branch_conf=conf.get('branch', {}),
+        branch_conf=conf.branch,
     )
-    FSM.Net = Net
-    net = FSM(**kwargs)
+
+    cosg = CoefficientScheduler(conf.coefficients, {"piter": "x", "max_epochs": "M"})
+    net = Net(cmgr=cosg, cps=CheckpointSupport(conf.misc.memory_trade), **conf.model)
+    fsm = FSM(net, cosg, **kwargs)
+
     trainer = Trainer(conf.misc, conf.paths, conf.flag)
 
     if conf.misc.get("continue", True):
         model_dir = trainer.default_root_dir
         name = conf.misc.get("load_from", "latest") + ".pt"
         path = os.path.join(model_dir, name)
-        net = net.load_from_checkpoint(path, **kwargs)
+        fsm = fsm.load_from_checkpoint(path, **kwargs)
     else:
-        net.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
-        net.hparams = conf
+        fsm.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
 
-    pl.utilities.seed.seed_everything(net.seed)
+    pl.utilities.seed.seed_everything(fsm.seed)
 
     device = gpus2device(trainer.gpus)
     datamodule = DPLSet(
@@ -136,40 +156,54 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
         conf.data.datasets,
         tv=conf.data.get('split', (8, 2)),
         mask_prob=conf.data.get('mask_usage', 1.),
-        aug_aimsize=conf.misc.get("augment", None),
+        aug_aimsize=conf.misc.augment,
         device=device,
     )
     datamodule.prepare_data()
     datamodule.setup()
-    net.score_caption = datamodule.score_caption
+    fsm.score_caption = datamodule.score_caption
 
-    return trainer, net, datamodule
+    return trainer, fsm, datamodule
+
+
+def runFromCLI(FSM: type[FSMBase]):
+    """Given the config in all, construct 3 key components for training, 
+    which are all initialed with minimal config sections.
+
+    Args:
+        FSM (type[FSMBase]): [description]
+
+    Returns:
+        LightningCLI
+    """
+    cli = LightningCLI(FSM, DPLSet, trainer_class=Trainer, subclass_mode_model=True)
+    return cli
 
 
 def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
     conf = getConfig(conf_path)
     kwargs = dict(
-        model_conf=conf.model,
-        coeff_conf=conf.coefficients,
         misc=conf.misc,
         op_conf=conf.optimizer,
         sg_conf=conf.scheduler,
         branch_conf=conf.branch,
     )
-    FSM.Net = Net
-    net = FSM(**kwargs)
+
+    cosg = CoefficientScheduler(conf.coefficients, {"piter": "x", "max_epochs": "M"})
+    net = Net(cmgr=cosg, cps=CheckpointSupport(conf.misc.memory_trade), **conf.model)
+    fsm = FSM(net, cosg, **kwargs)
 
     trainer = Trainer(conf.misc, conf.paths, conf.flag, logger_stage='test')
     model_dir = trainer.default_root_dir
-    
+
     path = os.path.join(model_dir, "best.pt")
     if not os.path.exists(path):
         warn(f'{path} does not exist. Will use latest.pt instead.')
         path = os.path.join(model_dir, "latest.pt")
         assert os.path.exists(path), 'no checkpoint saved.'
 
-    net = net.load_from_checkpoint(path, **kwargs)
-    pl.utilities.seed.seed_everything(net.seed)
+    fsm = fsm.load_from_checkpoint(path, **kwargs)
+    pl.utilities.seed.seed_everything(fsm.seed)
 
     device = gpus2device(trainer.gpus)
 
@@ -177,4 +211,4 @@ def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
     datamodule.prepare_data()
     datamodule.setup()
 
-    return trainer, net, datamodule
+    return trainer, fsm, datamodule

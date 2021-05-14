@@ -15,6 +15,7 @@ model:
   antialias: True
 
   padding_mode: same
+  ensemble_mode: add
 
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler

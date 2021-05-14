@@ -7,8 +7,10 @@ A toy implement for classifying benign/malignant and BIRADs
 import torch
 import torch.nn as nn
 from common import freeze
+from common.loss import confidence
 from common.optimizer import get_need_decay, split_upto_decay
 from common.support import *
+from common.utils import CropUpsample
 from data.augment.online import RandomAffine
 from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
@@ -25,6 +27,7 @@ value_only = lambda d: first(d.values())
 @autoPropertyClass
 class BIRADsYNet(YNet, MultiBranch):
     K: int
+    ensemble_mode: bool
 
     def __init__(
         self,
@@ -36,6 +39,7 @@ class BIRADsYNet(YNet, MultiBranch):
         *,
         norm="batchnorm",
         bnneck=True,
+        ensemble_mode=False,
         **kwargs
     ):
         YNet.__init__(self, cps, in_channel, width, ulevel, norm=norm, **kwargs)
@@ -43,6 +47,25 @@ class BIRADsYNet(YNet, MultiBranch):
         self.norm_layer = (nn.BatchNorm1d if bnneck else nn.Identity)(self.yoc)
         self.mfc = nn.Linear(self.yoc, 2)
         self.bfc = nn.Linear(self.yoc, K)
+        self.crop = CropUpsample(512, threshold=0.15)
+        self.fast_train = True
+
+    def ensemble(self, X, r: dict, confidens=None):
+        if not self.ensemble_mode: return r
+        assert 'seg' in r
+
+        if confidens is None: confidens = confidence(r['seg'])
+        if confidens < 0.9: return r
+
+        X = self.crop.forward(X, r['seg'])
+        r2 = self.forward(X, segment=False, logit=True)
+
+        t = (confidens - 0.9) * 5  # [0, 0.5]
+        r = r.copy()               # preserve caller's original r
+        r['lm'] = (1 - t) * r['lm'] + t * r2['lm']
+        r['lb'] = (1 - t) * r['lb'] + t * r2['lb']
+
+        return r
 
     def branch_weight(self, weight_decay: dict):
         """
@@ -71,7 +94,9 @@ class BIRADsYNet(YNet, MultiBranch):
         # BNNeck below.
         # See: A Strong Baseline and Batch Normalization Neck for Deep Person Re-identification
         # Use ft to calculate triplet, etc.; use fi to classify.
-        r = YNet.forward(self, X, segment, classify)
+        r = YNet.forward(
+            self, X, segment or not (self.fast_train and self.training), classify
+        )
         if not classify:
             return r
 
@@ -80,6 +105,12 @@ class BIRADsYNet(YNet, MultiBranch):
 
         r["lm"] = self.mfc(fi)                 # [N, 2]
         r["lb"] = self.bfc(freeze(fi, 1))      # [N, K]
+
+        if segment and (confidens := confidence(r['seg'])) >= 0.9:
+            self.fast_train = False
+            print('fast_train is switched off.')
+            r = self.ensemble(X, r, confidens)
+
         if logit: return r
 
         r["pm"] = self.sigma(r['lm'])
@@ -154,7 +185,8 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         need_seg = self.enable_seg and mask is not None
         need_sa = need_seg and self.enable_sa
 
-        r: dict = self.ynet(X, segment=need_seg, classify=True, logit=True)
+        r: dict = self.ynet.forward(X, segment=need_seg, classify=True, logit=True)
+
         if need_sa or self.enable_siam:
             aX, amask = self.aug(X, mask) if need_sa else (self.aug(X), None)
             r2 = self.ynet(aX, segment=need_sa, classify=self.enable_siam, logit=True)

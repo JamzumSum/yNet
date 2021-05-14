@@ -1,7 +1,7 @@
 model:
   aug_conf:
     translate: .25
-    scale: 1
+    scale: 1.25
 
   smooth: 0
 
@@ -26,7 +26,7 @@ data:
     BUSI: 820
     set2: 240
     set3: 340
-    BIRADs: 280
+    # BIRADs: 210
 
 # trainer flag
 flag:

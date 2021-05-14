@@ -1,3 +1,4 @@
+from typing import Union
 import pytorch_lightning as pl
 from common.support import DeviceAwareness
 from misc.decorators import autoPropertyClass
@@ -16,16 +17,26 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
 
     def __init__(
         self,
-        conf,
-        sets: list,
+        dataloader_conf: dict,
+        sets: Union[list, dict],
         *,
-        tv=(8, 2),
-        mask_prob=1.,
-        aug_aimsize=None,
+        tv: tuple = (8, 2),
+        mask_prob: float = 1.,
+        aug_aimsize: int = None,
         device=None,
     ):
+        """[summary]
+
+        Args:
+            dataloader_conf (dict): config of dataloaders
+            sets (Union[list, dict]): datasets and corresponding aug_aimsize
+            tv (tuple, optional): train/validation split rate. Defaults to (8, 2).
+            mask_prob (float, optional): usage of mask. Defaults to 1..
+            aug_aimsize (int, optional): total aim size after augment. Defaults to None.
+            device ([type], optional): augment on this device. Defaults to None.
+        """    
         DeviceAwareness.__init__(self, device)
-        self.conf = conf
+        self.conf = dataloader_conf
         if isinstance(sets, (dict, DictConfig)):
             self.sets = tuple(sets.keys())
             self.aimsize = tuple(sets.values())

@@ -19,7 +19,19 @@ def smoothed_label(target, smoothing=0.0, K=-1):
     return onehot.float().clamp_(zero, one)
 
 
-def _reduct(r, reduction: str):
+def _reduct(r: Tensor, reduction: str):
+    """reduce a tensor to a single value
+
+    Args:
+        r (Tensor): [any shape]
+        reduction (str): `none`/`mean`/`sum`
+
+    Raises:
+        ValueError: if reduction is not valid
+
+    Returns:
+        Tensor: [single value]
+    """
     if reduction == "none":
         return r
     elif reduction == "sum":
@@ -64,7 +76,7 @@ def focal_smooth_ce(P, Y, gamma=2.0, smooth=0.0, weight=None, reduction="mean"):
 
     Returns:
         Tensor: [description]
-    """    
+    """
     K = P.size(1)
     YK = smoothed_label(Y, smooth, K)
     ce = -YK * P.log_softmax(1)    # [N, K]
@@ -107,3 +119,19 @@ def diceCoefficient(p, gt, eps: float = 1e-5, reduction: str = "mean"):
     dice = (2 * TP).clamp(min=eps) / (2 * TP + FP + FN).clamp(min=eps)
 
     return _reduct(dice, reduction)
+
+
+@torch.jit.script
+def confidence(X: Tensor, reduction: str = 'mean') -> Tensor:
+    """Calcuate the confidence of an output tensor. The more its values are close to 0&1, the more confident it is. 
+    While the more its values are close to 0.5, the less confident it is.
+
+    Args:
+        X (Tensor): [Any shape]
+
+    Returns:
+        Tensor: 0~1
+    """
+    X = 4 * (X - 0.5) ** 2
+    X = X.flatten(1).mean(1)
+    return _reduct(X, reduction)

@@ -1,6 +1,6 @@
 ## Introduction
 
-yNet: A Breast Ultrasound Image Diagnosis Algorithm Based on Representation Learning with Small Samples.
+yNet: A Breast Ultrasound Image Classification Algorithm Based on Metric Learning.
 > ~~A Computer Aided Denoisis Algorithom for Classifying Breast Ultrasound Images Based on Weakly-Supervised Few Shot Learning~~
 
 ---
@@ -12,7 +12,7 @@ yNet: A Breast Ultrasound Image Diagnosis Algorithm Based on Representation Lear
 
 - python 3.9+
 - pytorch 1.7+
-- pytorch-lightning 1.2.6+
+- pytorch-lightning 1.3.0+
 - opencv-python
 - rich
 - omegaconf
