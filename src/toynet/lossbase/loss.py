@@ -14,12 +14,14 @@ import torch.nn.functional as F
 from common import freeze
 from common.layers import MLP
 from common.loss import F, focal_smooth_bce, focal_smooth_ce
-from common.loss.triplet import WeightedExampleTripletLoss
 from misc import CoefficientScheduler as CSG
 
 _S2T = dict[str, torch.Tensor]
 
-__all__ = ["SiameseBase", "TripletBase", "CEBase", "MSESegBase", "IdentityBase"]
+__all__ = [
+    "SiameseBase", "TripletBase", "CEBase", "MSESegBase", "IdentityBase",
+    "ConsistencyBase"
+]
 
 
 class LossBase(ABC, nn.Module):
@@ -77,6 +79,8 @@ class TripletBase(LossBase):
         super().__init__(cmgr)
         margin = self.cmgr.get('margin', 0.3)
         self.enable = margin != 0 or not self.cmgr.isConstant('margin')
+
+        from common.loss.triplet import WeightedExampleTripletLoss
         self.triplet = WeightedExampleTripletLoss(margin, normalize, 'none')
 
     def forward(self, ft, Ym):
@@ -106,7 +110,8 @@ class CEBase(LossBase):
 
 
 class MSESegBase(LossBase):
-    """[summary]
+    def forward(self, seg=None, mask=None):
+        """[summary]
 
         Args:
             seg (Tensor[float], optional): [description]. Defaults to None.
@@ -115,9 +120,21 @@ class MSESegBase(LossBase):
         Returns:
             Tensor: [description]
         """
-    def forward(self, seg=None, mask=None):
         if mask is None or seg is None:
             return {}
         weight_focus_pos = self.cmgr.get("weight_focus_pos", '1 - x ** 2')
         weight = weight_focus_pos * mask + 1
         return {"seg": ((seg - mask) ** 2 * weight).mean(dim=(1, 2, 3))}
+
+
+class ConsistencyBase(LossBase):
+    def __init__(self, cmgr: CSG, K: int, clip: float = 0.9):
+        super().__init__(cmgr)
+
+        from toynet.discriminator import ManualDiscriminator
+        self.D = ManualDiscriminator(K)
+        self.clip = clip
+
+    def forward(self, pm, pb):
+        r, loss = self.D.__loss__(pm, pb, self.clip)
+        return loss

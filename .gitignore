@@ -6,4 +6,7 @@
 /data
 /model
 
-__pycache__
+*.pyc
+
+/yapf_style.cfg
+/.pylintrc

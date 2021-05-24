@@ -1,5 +1,5 @@
 from unittest import TestCase
-from misc.indexserial import indexDumpAll, IndexLoader
+from indexserial import indexDumpAll, IndexLoader
 from random import randint
 
 class TestSerialize(TestCase):

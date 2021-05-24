@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from common.loss import smoothed_label
 from common.support import HasDiscriminator, MultiBranch
 from common import freeze
 from .lossbase import HasLoss, MultiTask
@@ -11,6 +10,35 @@ def rand_smooth_label(target: torch.Tensor, smooth=0.1, K=-1) -> torch.Tensor:
     mask = F.one_hot(target, num_classes=K).float()
     rnd = torch.rand_like(target)
     return mask * rnd * (1 - smooth) + (1 - mask) * rnd * smooth
+
+
+class ManualDiscriminator(nn.Module, HasLoss):
+    def __init__(self, K, p=1) -> None:
+        super().__init__()
+        assert K == 3
+        self.p = p
+
+        weight = [0.02, 0.5, 0.95]
+        self.register_buffer('weight', torch.Tensor(weight))
+
+    def forward(self, Pm, Pb):
+        """calculate consistency of pm and pb using manually given weights.
+
+        Args:
+            Pm (Tensor): [N, 2]
+            Pb (Tensor): [N, K]
+
+        Returns:
+            Tensor: [N, 1]. in (0, 1)
+        """
+        dist = (Pb * self.weight).sum(dim=-1) - Pm[:, -1] # [N]
+        dist = dist.unsqueeze(-1)                         # [N, 1]
+        return torch.norm(1 - dist, self.p, dim=0, keepdim=True)
+
+    def __loss__(self, pm, pb, clip=0.9) -> tuple:
+        r = {'cons': (c := self.forward(pm, pb))}
+        loss = {'sd': (1 - c.squeeze(1)).clamp_min(clip)}
+        return r, loss
 
 
 class SimpleDiscriminator(nn.Sequential, HasLoss):
@@ -40,7 +68,7 @@ class SimpleDiscriminator(nn.Sequential, HasLoss):
     def __loss__(self, pm, pb, real=True, clip=0.) -> tuple:
         r = {'cons': (c := self.forward(pm, pb))}
         y = int(real)
-        loss = {'sd': (c.squeeze(1) - y).pow(2).clamp_min(clip)}
+        loss = {'sd': (y - c.squeeze(1)).pow(2).clamp_min(clip)}
         return r, loss
 
 

@@ -17,7 +17,7 @@ from misc import CoefficientScheduler as CSG
 from misc.decorators import autoPropertyClass
 
 from .lossbase import MultiTask
-from .lossbase.loss import *
+from .lossbase.loss import * 
 from .ynet import YNet
 
 first = lambda it: next(iter(it))
@@ -147,8 +147,9 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
             aug_conf.get('scale', (0.8, 1.1)),
         )
         # loss bases
-        self.triplet = TripletBase(cmgr, True)
         self.ce = CEBase(cmgr, self.ynet.K, smooth)
+        self.dis = ConsistencyBase(cmgr, self.ynet.K)
+        self.triplet = TripletBase(cmgr, True)
         self.seg = MSESegBase(cmgr)
         self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
 
@@ -185,13 +186,14 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         need_seg = self.enable_seg and mask is not None
         need_sa = need_seg and self.enable_sa
 
-        r: dict = self.ynet.forward(X, segment=need_seg, classify=True, logit=True)
+        r: dict = self.ynet.forward(X, segment=need_seg, classify=True)
 
         if need_sa or self.enable_siam:
             aX, amask = self.aug(X, mask) if need_sa else (self.aug(X), None)
-            r2 = self.ynet(aX, segment=need_sa, classify=self.enable_siam, logit=True)
+            r2 = self.ynet(aX, segment=need_sa, classify=self.enable_siam)
 
         loss = self.ce(r["lm"], r["lb"], Ym, Yb)
+        loss |= self.dis(r['pm'], r['pb'])
         loss |= self.seg(r.get('seg', None), mask)
 
         if self.enable_siam:

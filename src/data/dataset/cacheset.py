@@ -1,3 +1,5 @@
+from indexserial import IndexLoader
+
 from . import *
 
 

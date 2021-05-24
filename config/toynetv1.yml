@@ -1,22 +1,31 @@
-import: ./toynetv1_gpu.yml
+import: ./base.yml
+
 model:
-  width: 2
+  in_channel: 1
+  K: 3 # 2, 3, 4a, 4b, 4c, 5
+  width: 16
 
-flag: 
-  gpus: 0
-  limit_train_batches: 1
-  limit_val_batches: 4
-  limit_test_batches: 1
+  # for (512, 512) image, unet level + ypath level <= 8
+  ulevel: 4
+  # ypath like res34: [4, 6, 3]
+  # ypath like res18: [2, 2, 2]
+  ylevels: [6, 3]
 
-misc:
-  memory_trade: True
+  # use anti-alias pooling when downsampling
+  antialias: True
 
-dataloader:
-  training:
-    batchsize_k: 1
-  validating:
-    batch_size: 2
+  padding_mode: same
+  ensemble_mode: add
+
+# branch is used to control behaviors of diverse param groups.
+# args here will override those in optimizer and scheduler
+branch:
+  B:
+    optimizer: null
+    scheduler: null
 
 paths:
-  model_dir: model/toynetv1/tmp
-  log_dir: log/toynetv1/tmp
+  name: ynet
+  model_dir: model/toynetv1/ynet
+  log_dir: log/toynetv1/{date}
+  post_training: src/post_training.py

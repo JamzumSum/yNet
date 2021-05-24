@@ -11,7 +11,6 @@ from collections import defaultdict
 from typing import Iterable
 
 import torch
-from misc.indexserial import IndexLoader
 from torch import default_generator as ggen  # type: ignore
 from torch.utils.data import ConcatDataset, Dataset, Subset, random_split
 

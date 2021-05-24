@@ -6,7 +6,7 @@ import cv2 as cv
 import numpy as np
 import torch
 import yaml
-from misc.indexserial import IndexDumper
+from indexserial import IndexDumper
 
 BIRAD_NAME = ['3', '4', '5']
 BIRAD_MAP = {

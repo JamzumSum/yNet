@@ -83,9 +83,8 @@ class SimBack(nn.Module, MultiTask):
         self._getFC().register_forward_pre_hook(fibuf)
         return fibuf
 
-    @classmethod
-    def getBackbone(cls, arch: str, num_classes: int) -> nn.Module:
-        return getattr(cls.package, arch)(num_classes=num_classes)
+    def getBackbone(self, arch: str, num_classes: int) -> nn.Module:
+        return getattr(self.package, arch)(num_classes=num_classes)
 
     def forward(self, X: Tensor, logit=False):
         X = X.repeat(1, 3, 1, 1)   # [N, 3, H, W]

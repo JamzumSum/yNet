@@ -1,6 +1,6 @@
-from typing import Union
+from typing import Optional, Union
 import pytorch_lightning as pl
-from common.support import DeviceAwareness
+import torch
 from misc.decorators import autoPropertyClass
 from omegaconf import DictConfig
 
@@ -11,9 +11,10 @@ from .dataset.cacheset import CachedDatasetGroup
 
 
 @autoPropertyClass
-class DPLSet(pl.LightningDataModule, DeviceAwareness):
+class DPLSet(pl.LightningDataModule):
     tv: tuple[int, int]
     mask_prob: float
+    device: Optional[Union[str, torch.device]]
 
     def __init__(
         self,
@@ -34,8 +35,9 @@ class DPLSet(pl.LightningDataModule, DeviceAwareness):
             mask_prob (float, optional): usage of mask. Defaults to 1..
             aug_aimsize (int, optional): total aim size after augment. Defaults to None.
             device ([type], optional): augment on this device. Defaults to None.
-        """    
-        DeviceAwareness.__init__(self, device)
+        """
+        super().__init__()
+
         self.conf = dataloader_conf
         if isinstance(sets, (dict, DictConfig)):
             self.sets = tuple(sets.keys())

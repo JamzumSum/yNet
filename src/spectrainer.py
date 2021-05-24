@@ -276,7 +276,7 @@ class ToyNetTrainer(FSMBase):
                 )
 
             for k, (p, y) in items.items():
-                if y not in res: continue
+                if p not in res or y not in res: continue
                 p, y = res[p], res[y]
                 if all(i is None for i in y): continue
 

@@ -12,7 +12,6 @@ from torch.utils.data import (
 
 from data.dataset import Distributed
 
-mp.set_start_method("spawn", True)
 merge_list = lambda l: sum(l, [])
 
 

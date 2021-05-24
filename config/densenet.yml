@@ -1,0 +1,13 @@
+import: ./base.yml
+
+model:
+  # densenet121, densenet161, densenet169, densenet201
+  model: densenet121
+  K: 3
+  smooth: 0.
+
+paths:
+  name: densenet
+  model_dir: model/densenet/simdens
+  log_dir: log/densenet/{date}
+  post_training: src/post_training.py

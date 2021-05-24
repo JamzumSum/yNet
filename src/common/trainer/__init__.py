@@ -11,14 +11,11 @@ from warnings import warn
 import pytorch_lightning as pl
 import torch
 from data.plsupport import DPLSet
+from misc import CheckpointSupport, CoefficientScheduler
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.utilities.cli import LightningCLI
 from torch import nn
-from misc import CheckpointSupport, CoefficientScheduler
-
-from spectrainer import ToyNetTrainer
 
 from .fsm import FSMBase
 from .richbar import RichProgressBar
@@ -42,6 +39,7 @@ class Trainer(pl.Trainer):
             num_sanity_val_steps=0,
             terminate_on_nan=True,
             log_every_n_steps=10,
+            auto_select_gpus=flag.get('gpus', None),
             **flag
         )
 
@@ -73,20 +71,6 @@ class Trainer(pl.Trainer):
         return checkpoint_callback
 
 
-class CLI(LightningCLI):
-    def before_fit(self) -> None:
-        self.model.score_caption = self.datamodule.score_caption
-
-    def after_fit(self) -> None:
-        post = self.config.paths.get("post_training", "")
-        if post and os.path.exists(post):
-            with open(post) as f:
-                # use exec here since
-                # 1. `import` will excute the script at once
-                # 2. you can modify the script when training
-                exec(compile(f.read(), post, exec))
-
-
 def getConfig(path: str) -> DictConfig:
     d = OmegaConf.load(path)
     if "import" not in d: return d
@@ -99,6 +83,10 @@ def getConfig(path: str) -> DictConfig:
     path = [os.path.join(os.path.dirname(path), i) for i in imp]
     imd = [getConfig(p) for p in path]
     return OmegaConf.merge(*imd, d)
+
+
+def getConfigWithCLI(path: str) -> DictConfig:
+    return OmegaConf.merge(getConfig(path), OmegaConf.from_cli())
 
 
 def gpus2device(gpus):
@@ -126,7 +114,7 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
         LightningModule,
         LightningDataModule
     """
-    conf = getConfig(conf_path)
+    conf = getConfigWithCLI(conf_path)
     kwargs = dict(
         misc=conf.misc,
         op_conf=conf.optimizer,
@@ -166,22 +154,8 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
     return trainer, fsm, datamodule
 
 
-def runFromCLI(FSM: type[FSMBase]):
-    """Given the config in all, construct 3 key components for training, 
-    which are all initialed with minimal config sections.
-
-    Args:
-        FSM (type[FSMBase]): [description]
-
-    Returns:
-        LightningCLI
-    """
-    cli = LightningCLI(FSM, DPLSet, trainer_class=Trainer, subclass_mode_model=True)
-    return cli
-
-
 def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
-    conf = getConfig(conf_path)
+    conf = getConfigWithCLI(conf_path)
     kwargs = dict(
         misc=conf.misc,
         op_conf=conf.optimizer,
