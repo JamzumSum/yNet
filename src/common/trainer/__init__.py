@@ -30,7 +30,7 @@ class Trainer(pl.Trainer):
         self.paths = paths
 
         tb = self._getLogger(logger_stage)
-        checkpoint_callback = self._getCheckpointCallback()
+        checkpoint_callback = self._getCheckpointCallback(tb.version)
         pl.Trainer.__init__(
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
@@ -47,6 +47,10 @@ class Trainer(pl.Trainer):
     def name(self):
         return self.paths.name
 
+    @property
+    def version(self):
+        return self.paths.version
+
     def _getLogger(self, stage=None):
         log_dir = self.paths.get("log_dir", 'log/{date}').format(
             date=date.today().strftime("%m%d")
@@ -57,6 +61,7 @@ class Trainer(pl.Trainer):
         return TensorBoardLogger(
             log_dir,
             self.name,
+            self.version,
             log_graph=self.misc.get('log_graph', True),
             default_hp_metric=False
         )
@@ -65,8 +70,9 @@ class Trainer(pl.Trainer):
         model_dir = self.paths.get("model_dir", "model/{data}").format(
             date=date.today().strftime("%m%d")
         )
-        if version:
-            model_dir = os.path.join(model_dir, f"version_{version}")
+        if version or version == 0:
+            version = f"version_{version}" if isinstance(version, int) else version
+            model_dir = os.path.join(model_dir, version)
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
             dirpath=model_dir,
@@ -74,7 +80,7 @@ class Trainer(pl.Trainer):
             save_last=True,
             mode="min",
         )
-        checkpoint_callback.FILE_EXTENSION = ".pt"
+        checkpoint_callback.FILE_EXTENSION = ".pth"
         checkpoint_callback.best_model_path = model_dir
         checkpoint_callback.CHECKPOINT_NAME_LAST = "latest"
         return checkpoint_callback
@@ -139,7 +145,7 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
 
     if conf.misc.get("continue", True):
         model_dir = trainer.default_root_dir
-        name = conf.misc.get("load_from", "latest") + ".pt"
+        name = conf.misc.get("load_from", "latest") + ".pth"
         path = os.path.join(model_dir, name)
         fsm = fsm.load_from_checkpoint(path, **kwargs)
     else:
@@ -179,10 +185,10 @@ def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
     trainer = Trainer(conf.misc, conf.paths, conf.flag, logger_stage='test')
     model_dir = trainer.default_root_dir
 
-    path = os.path.join(model_dir, "best.pt")
+    path = os.path.join(model_dir, "best.pth")
     if not os.path.exists(path):
-        warn(f'{path} does not exist. Will use latest.pt instead.')
-        path = os.path.join(model_dir, "latest.pt")
+        warn(f'{path} does not exist. Will use latest.pth instead.')
+        path = os.path.join(model_dir, "latest.pth")
         assert os.path.exists(path), 'no checkpoint saved.'
 
     fsm = fsm.load_from_checkpoint(path, **kwargs)
