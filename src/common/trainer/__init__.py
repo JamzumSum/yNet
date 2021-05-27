@@ -28,14 +28,14 @@ class Trainer(pl.Trainer):
     ):
         self.misc = misc
         self.paths = paths
-        self.name = paths.get("name", "default")
 
+        tb = self._getLogger(logger_stage)
         checkpoint_callback = self._getCheckpointCallback()
         pl.Trainer.__init__(
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
             default_root_dir=checkpoint_callback.dirpath,
-            logger=self._getLogger(logger_stage),
+            logger=tb,
             num_sanity_val_steps=0,
             terminate_on_nan=True,
             log_every_n_steps=10,
@@ -43,21 +43,30 @@ class Trainer(pl.Trainer):
             **flag
         )
 
+    @property
+    def name(self):
+        return self.paths.name
+
     def _getLogger(self, stage=None):
-        log_dir = self.paths.get("log_dir", os.path.join("log", self.name)).format(
+        log_dir = self.paths.get("log_dir", 'log/{date}').format(
             date=date.today().strftime("%m%d")
         )
-        return TestLogger(
-            log_dir, self.name, add={}
-        ) if stage == 'test' else TensorBoardLogger(
-            log_dir, self.name, log_graph=True, default_hp_metric=False
+        if stage == 'test':
+            return TestLogger(log_dir, self.name, add={})
+
+        return TensorBoardLogger(
+            log_dir,
+            self.name,
+            log_graph=self.misc.get('log_graph', True),
+            default_hp_metric=False
         )
 
-    def _getCheckpointCallback(self):
-        model_dir = self.paths.get("model_dir",
-                                   os.path.join("model", self.name)).format(
-                                       date=date.today().strftime("%m%d")
-                                   )
+    def _getCheckpointCallback(self, version: int = None):
+        model_dir = self.paths.get("model_dir", "model/{data}").format(
+            date=date.today().strftime("%m%d")
+        )
+        if version:
+            model_dir = os.path.join(model_dir, f"version_{version}")
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
             dirpath=model_dir,

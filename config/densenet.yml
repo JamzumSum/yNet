@@ -6,8 +6,8 @@ model:
   K: 3
   smooth: 0.
 
+misc:
+  log_graph: False
+
 paths:
   name: densenet
-  model_dir: model/densenet/simdens
-  log_dir: log/densenet/{date}
-  post_training: src/post_training.py

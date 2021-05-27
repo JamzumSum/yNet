@@ -17,7 +17,7 @@ from misc import CoefficientScheduler as CSG
 from misc.decorators import autoPropertyClass
 
 from .lossbase import MultiTask
-from .lossbase.loss import * 
+from .lossbase.loss import *
 from .ynet import YNet
 
 first = lambda it: next(iter(it))
@@ -151,7 +151,6 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         self.dis = ConsistencyBase(cmgr, self.ynet.K)
         self.triplet = TripletBase(cmgr, True)
         self.seg = MSESegBase(cmgr)
-        self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
 
         isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
                                  ) or cmgr.get(f"task.{task}", 1) != 0
@@ -163,7 +162,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
 
         if not self.enable_seg: self.seg.enable = False
         if not isenable('tm'): self.triplet.enable = False
-        if not self.enable_siam: self.siamese.enable = False
+        if self.enable_siam: self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
         if not (self.enable_seg or self.enable_sa): self.ynet.ydetach = False
 
     def forward(self, *args, **kwargs):
@@ -214,6 +213,8 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
 
     def branch_weight(self, weight_decay: dict):
         d = self.ynet.branch_weight(weight_decay)
+        if not self.enable_siam: return d
+
         p = self.siamese.parameters()
         iorf = lambda s: s in d and s
         d[iorf('M_no_decay') or iorf('M')].extend(p)

@@ -26,6 +26,3 @@ branch:
 
 paths:
   name: ynet
-  model_dir: model/toynetv1/ynet
-  log_dir: log/toynetv1/{date}
-  post_training: src/post_training.py

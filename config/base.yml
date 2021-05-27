@@ -69,3 +69,9 @@ dataloader:
   # for evaluating, validating, testing
   validating:
     batch_size: 16
+
+paths:
+  log_dir: log/{date}
+  model_dir: model/{date}
+  post_training: src/post_training.py
+  

@@ -3,6 +3,7 @@ import os
 from spectrainer import ToyNetTrainer
 from common.trainer import getTrainComponents
 from baseline.resnet import Resx2, SimRes
+from baseline.densenet import Densex2, SimDense
 
 
 def post_script(post):
@@ -15,7 +16,9 @@ def post_script(post):
 
 
 def main():
-    trainer, net, data = getTrainComponents(ToyNetTrainer, Resx2, "./config/simres.yml")
+    trainer, net, data = getTrainComponents(
+        ToyNetTrainer, SimDense, "./config/densenet.yml"
+    )
     trainer.fit(net, datamodule=data)
 
     post = trainer.paths.get("post_training", "")

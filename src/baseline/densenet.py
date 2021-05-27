@@ -9,8 +9,8 @@ class SimDense(SimBack):
     '''
     package = densenet
 
-    def __init__(self, cmgr, cps, model='densenet121', /, **kwargs):
-        super().__init__(cmgr, cps, model, memory_efficient=cps.memory_trade, **kwargs)
+    def __init__(self, cmgr, cps, K, model='densenet121', **kwargs):
+        super().__init__(cmgr, cps, K, model, memory_efficient=cps.memory_trade, **kwargs)
 
 
 class Densex2(ParalBack):

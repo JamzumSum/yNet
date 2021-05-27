@@ -75,7 +75,8 @@ def getBranchScheduler(cls: type, optimizer, arglist: list[dict], extra=None):
 
 
 def get_arg_name(func) -> list:
-    return func.__code__.co_varnames[:func.__code__.co_argcount]
+    code = func.__code__
+    return code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]
 
 
 def get_arg_default(func, arg: str):

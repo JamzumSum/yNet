@@ -8,6 +8,3 @@ model:
 
 paths:
   name: resnet
-  model_dir: model/resnet/simres
-  log_dir: log/resnet/{date}
-  post_training: src/post_training.py

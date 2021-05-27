@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torchvision.models.resnet as resnet
-from common.optimizer import get_need_decay, split_upto_decay
+from common.optimizer import get_arg_name, get_need_decay, split_upto_decay
 from common.support import MultiBranch
 from data.augment.online import RandomAffine
 from misc import CheckpointSupport as CPS
@@ -35,17 +35,19 @@ class SimBack(nn.Module, MultiTask):
         K: int,
         model: str,
         *,
+        pretrain_path: dict = None,
         aug_conf=None,
         aug_weight=0.3333,
         zdim=2048,
-        smooth=0.
+        smooth=0.,
+        **kwargs
     ):
         nn.Module.__init__(self)
         MultiTask.__init__(self, cmgr, aug_weight)
         self.cps = cps
 
         self.sigma = nn.Softmax(dim=1)
-        self.mbranch = self.getBackbone(model, 2)
+        self.mbranch = self.getBackbone(model, 2, **kwargs)
         self.bn = nn.BatchNorm1d(self._getFC().in_features)
         self.fi_mhook = self.fiHook(self.bn)
 
@@ -59,7 +61,6 @@ class SimBack(nn.Module, MultiTask):
 
         self.ce = CEBase(cmgr, K, smooth)
         self.triplet = TripletBase(cmgr, True)
-        self.siamese = SiameseBase(cmgr, self._getFC().in_features, zdim)
 
         isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
                                  ) or cmgr.get(f"task.{task}", 1) != 0
@@ -68,7 +69,8 @@ class SimBack(nn.Module, MultiTask):
         self.enable_siam = isenable('sim')
 
         if not isenable('tm'): self.triplet.enable = False
-        if not self.enable_siam: self.siamese.enable = False
+        if self.enable_siam:
+            self.siamese = SiameseBase(cmgr, self._getFC().in_features, zdim)
 
     def _getFC(self, model=None) -> nn.Linear:
         if model is None: model = self.mbranch
@@ -83,8 +85,8 @@ class SimBack(nn.Module, MultiTask):
         self._getFC().register_forward_pre_hook(fibuf)
         return fibuf
 
-    def getBackbone(self, arch: str, num_classes: int) -> nn.Module:
-        return getattr(self.package, arch)(num_classes=num_classes)
+    def getBackbone(self, arch: str, num_classes: int, **kwargs) -> nn.Module:
+        return getattr(self.package, arch)(num_classes=num_classes, **kwargs)
 
     def forward(self, X: Tensor, logit=False):
         X = X.repeat(1, 3, 1, 1)   # [N, 3, H, W]
@@ -122,7 +124,12 @@ class ParalBack(SimBack, MultiBranch):
     def __init__(self, cmgr: CSG, cps: CPS, K, model: tuple, **kwargs):
         if isinstance(model, str): model = (model, model)
         SimBack.__init__(self, cmgr, cps, K, model[0], **kwargs)
-        self.bbranch = self.getBackbone(model[1], K)
+
+        aname = get_arg_name(SimBack.__init__)[1:]
+        self.bbranch = self.getBackbone(
+            model[1], K, **{k: v
+                            for k, v in kwargs.items() if k not in aname}
+        )
 
         isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
                                  ) or cmgr.get(f"task.{task}", 1) != 0
