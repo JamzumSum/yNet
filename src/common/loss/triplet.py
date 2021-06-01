@@ -221,6 +221,7 @@ class WeightedExampleTripletLoss(torch.nn.Module):
         self.reduction = reduction
 
     def forward(self, embedding, target):
+        # TODO: Sync among GPUs
         if self.normalize:
             embedding = F.normalize(embedding, dim=1)
         return triplet_loss(

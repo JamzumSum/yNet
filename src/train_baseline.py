@@ -16,9 +16,7 @@ def post_script(post):
 
 
 def main():
-    trainer, net, data = getTrainComponents(
-        ToyNetTrainer, SimDense, "./config/densenet.yml"
-    )
+    trainer, net, data = getTrainComponents(ToyNetTrainer, Resx2, "./config/simres.yml")
     trainer.fit(net, datamodule=data)
 
     post = trainer.paths.get("post_training", "")

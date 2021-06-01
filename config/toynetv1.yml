@@ -15,6 +15,8 @@ model:
   antialias: True
 
   padding_mode: same
+
+  # whether to use ensemble in training. bool.
   ensemble_mode: add
 
 # branch is used to control behaviors of diverse param groups.

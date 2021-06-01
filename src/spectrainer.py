@@ -48,20 +48,16 @@ def getPLSchedulerDict(sg, monitor=None):
 
 
 class ToyNetTrainer(FSMBase):
-    Net = ToyNetV1
     net: MultiTask
 
     def __init__(
         self,
         net: nn.Module,
         cmgr, 
-        misc: DictConfig,
-        op_conf: ListConfig,
-        sg_conf: DictConfig,
-        branch_conf: DictConfig,
+        conf: DictConfig
     ):
-        self.branch_conf = {} if branch_conf is None else branch_conf
-        super().__init__(net, cmgr, misc, op_conf, sg_conf)
+        self.branch_conf = conf.get('branch', {})
+        super().__init__(net, cmgr, conf)
 
         self.flood = self.misc.get("flood", 0)
         self.scoring_log_image_epoch_train = -1
@@ -330,7 +326,7 @@ class ToyNetTrainer(FSMBase):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         X, ym, detail = batch["X"], batch["Ym"], batch["meta"]
         extra = {}
-        if issubclass(self.Net, SegmentSupported):
+        if isinstance(self.net, SegmentSupported):
             extra['segment'] = False
         r: dict = self.net(X, **extra)
 

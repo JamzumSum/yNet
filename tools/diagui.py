@@ -1,45 +1,20 @@
 import os
 import sys
-from dataclasses import dataclass
 from itertools import chain
-from PySide2.QtCore import QFile, QUrl
-from PySide2.QtGui import QBrush, QColor, QDesktopServices
-from PySide2.QtWidgets import QAbstractItemView, QFileDialog, QInputDialog, QTableWidgetItem
-import yaml
 
+import yaml
+from PySide2.QtCore import QFile, Qt, QUrl
+from PySide2.QtGui import QDesktopServices
+from PySide2.QtWidgets import QAbstractItemView, QFileDialog, QInputDialog
 from qtpy.QtWidgets import QApplication, QMainWindow
 
+from tools.chart import CMPieChartView, PRBarChartView
+from tools.common import *
 from tools.compile.diagui import Ui_WndMain
-
-argmax = lambda l: l.index(max(l))
-BIRAD_MAP = ['2', '3', '4', '5']
-
-
-@dataclass(frozen=True)
-class DiagBag:
-    pid: str
-    pm: float
-    pb: list
-    ym: int
-    yb: int
-
-    @staticmethod
-    def header():
-        return [
-            'pid', 'malignant prob', 'BIRADs prob distrib', 'malignant anno',
-            'BIRADs anno'
-        ]
-
-    def __iter__(self):
-        yield self.pid
-        yield f"{self.pm:.4f}"
-        yield '-' if self.pb is None else f"{BIRAD_MAP[argmax(self.pb)]}类 ({', '.join('%.4f' % i for i in self.pb)})"
-        yield str(self.ym)
-        yield '-' if self.yb is None else f"{BIRAD_MAP[self.yb]}类"
 
 
 class PIDSolver:
-    suffix = ('.jpg', '.png', '.bmp')
+    suffix = ('jpg', 'png', 'bmp')
     sets = ['BUSI', 'BIRADs', 'set2', 'set3']
 
     def __init__(self) -> None:
@@ -69,6 +44,15 @@ class DiaGUI(QMainWindow):
 
     def __post_init__(self):
         self.ui.tblDiag.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setWindowState(Qt.WindowMaximized)
+        self.ui.bcv = PRBarChartView('BI-RADS', BIRAD_MAP)
+        self.ui.mcv = PRBarChartView('B/M', ['benign', 'malignant'])
+        self.ui.bpie = CMPieChartView(
+            'BI-RADS Confusion Matrix', [f"BIRADS-{i}" for i in BIRAD_MAP]
+        )
+        self.ui.scrollContent.addWidget(self.ui.bcv)
+        self.ui.scrollContent.addWidget(self.ui.mcv)
+        self.ui.scrollContent.addWidget(self.ui.bpie)
 
     def configOpened(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -76,33 +60,17 @@ class DiaGUI(QMainWindow):
         )
         if not path: return
         with open(path) as f:
-            self.raw = {k: DiagBag(**v) for k, v in yaml.safe_load(f).items()}
+            raw, conf = yaml.safe_load_all(f)
+            self.raw = {k: DiagBag(**v) for k, v in raw.items()}
 
+        self.counter = Counter(self.raw.values(), self.thresh)
         self.conf_name = os.path.split(path)[-1]
         self.setWindowTitle(f'DiagUI: {self.conf_name}')
         self.refreshTable()
 
     def refreshTable(self):
-        self.filter = False
-        self.ui.tblDiag.clear()
-        self.ui.tblDiag.setHorizontalHeaderLabels(DiagBag.header())
-        self.ui.tblDiag.setRowCount(len(self.raw))
-        for i, d in enumerate(self.raw.values()):
-            for c, s in enumerate(d):
-                self.ui.tblDiag.setItem(i, c, QTableWidgetItem(s))
-        self.updateStat()
-        self.ui.tblDiag.resizeColumnsToContents()
-
-    def updateStat(self):
-        red = QBrush(QColor(255, 0, 0))
-        for i in range(len(self.raw)):
-            d = self.raw[self.ui.tblDiag.item(i, 0).text()]
-            if int(d.pm > self.thresh) != d.ym:
-                it = self.ui.tblDiag.item(i, 1)
-                it.setForeground(red)
-            if d.yb is not None and argmax(d.pb) != d.yb:
-                it = self.ui.tblDiag.item(i, 2)
-                it.setForeground(red)
+        self.ui.tblDiag.raw = self.raw
+        self.showStatistic()
 
     def setThreshold(self):
         t, ok = QInputDialog.getDouble(
@@ -111,7 +79,9 @@ class DiaGUI(QMainWindow):
         if not ok: return
         self.thresh = t
         if hasattr(self, 'raw') and self.raw:
-            self.updateStat()
+            self.ui.tblDiag.thresh = t
+            self.counter.allInOne(t)
+            self.showStatistic()
 
     def errorFilter(self, enable):
         self.filter = enable
@@ -165,6 +135,11 @@ class DiaGUI(QMainWindow):
         if d.yb is not None and argmax(d.pb) != d.yb:
             it[2] = f'<p style="color: red">{it[2]}</p>'
         return it
+
+    def showStatistic(self):
+        self.ui.bcv.refresh(self.counter.pb_precision, self.counter.pb_recall)
+        self.ui.mcv.refresh(self.counter.pm_precision, self.counter.pm_recall)
+        self.ui.bpie.refresh(self.counter.cb)
 
 
 if __name__ == "__main__":

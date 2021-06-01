@@ -6,34 +6,98 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>800</width>
+    <width>1002</width>
     <height>600</height>
    </rect>
+  </property>
+  <property name="font">
+   <font>
+    <family>Microsoft YaHei UI</family>
+   </font>
   </property>
   <property name="windowTitle">
    <string>DiagUI</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <layout class="QGridLayout" name="gridLayout">
-    <item row="0" column="0">
-     <widget class="QTableWidget" name="tblDiag">
-      <property name="styleSheet">
-       <string notr="true">a</string>
+   <layout class="QHBoxLayout" name="horizontalLayout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="leftMargin">
+     <number>8</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>8</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item>
+     <widget class="QSplitter" name="splitter">
+      <property name="orientation">
+       <enum>Qt::Horizontal</enum>
       </property>
-      <property name="sortingEnabled">
-       <bool>true</bool>
-      </property>
-      <property name="columnCount">
-       <number>5</number>
-      </property>
-      <attribute name="verticalHeaderVisible">
-       <bool>true</bool>
-      </attribute>
-      <column/>
-      <column/>
-      <column/>
-      <column/>
-      <column/>
+      <widget class="DiagTable" name="tblDiag">
+       <property name="selectionBehavior">
+        <enum>QAbstractItemView::SelectRows</enum>
+       </property>
+       <property name="textElideMode">
+        <enum>Qt::ElideNone</enum>
+       </property>
+       <property name="sortingEnabled">
+        <bool>true</bool>
+       </property>
+       <attribute name="verticalHeaderVisible">
+        <bool>true</bool>
+       </attribute>
+      </widget>
+      <widget class="QScrollArea" name="scrollArea">
+       <property name="horizontalScrollBarPolicy">
+        <enum>Qt::ScrollBarAlwaysOff</enum>
+       </property>
+       <property name="sizeAdjustPolicy">
+        <enum>QAbstractScrollArea::AdjustToContents</enum>
+       </property>
+       <property name="widgetResizable">
+        <bool>true</bool>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
+       </property>
+       <widget class="QWidget" name="scrollAreaWidgetContents">
+        <property name="geometry">
+         <rect>
+          <x>0</x>
+          <y>0</y>
+          <width>452</width>
+          <height>545</height>
+         </rect>
+        </property>
+        <layout class="QGridLayout" name="scrollContent">
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="horizontalSpacing">
+          <number>0</number>
+         </property>
+         <property name="verticalSpacing">
+          <number>8</number>
+         </property>
+        </layout>
+       </widget>
+      </widget>
      </widget>
     </item>
    </layout>
@@ -43,7 +107,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>800</width>
+     <width>1002</width>
      <height>27</height>
     </rect>
    </property>
@@ -122,7 +186,22 @@
     <string>Export markdown(*.md)</string>
    </property>
   </action>
+  <action name="actionStat">
+   <property name="text">
+    <string>Statistic</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+D</string>
+   </property>
+  </action>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>DiagTable</class>
+   <extends>QTableWidget</extends>
+   <header>tools.table</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections>
   <connection>
@@ -150,22 +229,6 @@
     <hint type="sourcelabel">
      <x>-1</x>
      <y>-1</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>399</x>
-     <y>299</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>tblDiag</sender>
-   <signal>cellDoubleClicked(int,int)</signal>
-   <receiver>WndMain</receiver>
-   <slot>viewPID(int,int)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>399</x>
-     <y>300</y>
     </hint>
     <hint type="destinationlabel">
      <x>399</x>
@@ -205,6 +268,38 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>actionStat</sender>
+   <signal>triggered()</signal>
+   <receiver>WndMain</receiver>
+   <slot>showStatistic()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>tblDiag</sender>
+   <signal>cellDoubleClicked(int,int)</signal>
+   <receiver>WndMain</receiver>
+   <slot>viewPID(int,int)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>399</x>
+     <y>300</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>configOpened()</slot>
@@ -212,5 +307,6 @@
   <slot>viewPID(int,int)</slot>
   <slot>errorFilter(bool)</slot>
   <slot>exportMarkdown()</slot>
+  <slot>showStatistic()</slot>
  </slots>
 </ui>

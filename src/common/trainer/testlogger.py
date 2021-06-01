@@ -1,6 +1,5 @@
 import os
 
-import pytorch_lightning as pl
 import yaml
 from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.loggers.base import rank_zero_experiment
@@ -10,10 +9,14 @@ from data.dataset.cacheset import DataMeta
 
 
 class TestLogger(LightningLoggerBase):
-    def __init__(self, save_dir, name='default', prefix='', add: dict = None):
+    def __init__(self, save_dir, name='default', version=None, prefix=''):
         super().__init__()
-        self.f = os.path.join(save_dir, name, prefix + 'test_raw.yml')
+        self.f = os.path.join(
+            save_dir, name,
+            prefix + ('test_raw.yml' if version is None else f'{version}.yml')
+        )
         self._d = {}
+        self.add = []
 
     @property
     def name(self):
@@ -41,7 +44,7 @@ class TestLogger(LightningLoggerBase):
         super().save()
         os.makedirs(os.path.dirname(self.f), exist_ok=True)
         with open(self.f, 'w') as f:
-            yaml.safe_dump(self._d, f)
+            yaml.safe_dump_all([self._d] + self.add, f)
         self._d.clear()
 
     @rank_zero_only

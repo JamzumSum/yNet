@@ -21,6 +21,8 @@ from .fsm import FSMBase
 from .richbar import RichProgressBar
 from .testlogger import TestLogger
 
+DATE = date.today().strftime("%m%d")
+
 
 class Trainer(pl.Trainer):
     def __init__(
@@ -30,7 +32,9 @@ class Trainer(pl.Trainer):
         self.paths = paths
 
         tb = self._getLogger(logger_stage)
-        checkpoint_callback = self._getCheckpointCallback(tb.version)
+        checkpoint_callback = self._getCheckpointCallback(
+            tb.version or self.version, logger_stage
+        )
         pl.Trainer.__init__(
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
@@ -39,7 +43,7 @@ class Trainer(pl.Trainer):
             num_sanity_val_steps=0,
             terminate_on_nan=True,
             log_every_n_steps=10,
-            auto_select_gpus=flag.get('gpus', None),
+            auto_select_gpus=bool(flag.gpus),
             **flag
         )
 
@@ -48,15 +52,13 @@ class Trainer(pl.Trainer):
         return self.paths.name
 
     @property
-    def version(self):
+    def version(self) -> str:
         return self.paths.version
 
     def _getLogger(self, stage=None):
-        log_dir = self.paths.get("log_dir", 'log/{date}').format(
-            date=date.today().strftime("%m%d")
-        )
+        log_dir = self.paths.get("log_dir", f'log/{DATE}')
         if stage == 'test':
-            return TestLogger(log_dir, self.name, add={})
+            return TestLogger(log_dir, self.name, self.version)
 
         return TensorBoardLogger(
             log_dir,
@@ -66,13 +68,21 @@ class Trainer(pl.Trainer):
             default_hp_metric=False
         )
 
-    def _getCheckpointCallback(self, version: int = None):
-        model_dir = self.paths.get("model_dir", "model/{data}").format(
-            date=date.today().strftime("%m%d")
-        )
+    def _getCheckpointCallback(self, version: int = None, stage=None):
+        model_dir = self.paths.get("model_dir", f'model/{DATE}')
+        model_dir = os.path.join(model_dir, self.name)
         if version or version == 0:
             version = f"version_{version}" if isinstance(version, int) else version
             model_dir = os.path.join(model_dir, version)
+
+        exist = os.path.exists(model_dir) and os.listdir(model_dir)
+        if stage == 'test' and not exist:
+            raise FileNotFoundError(model_dir)
+        elif stage is None and exist:
+            raise FileExistsError(model_dir)
+
+        self.model_dir = model_dir
+
         checkpoint_callback = ModelCheckpoint(
             monitor="err/B-M/validation",
             dirpath=model_dir,
@@ -104,6 +114,14 @@ def getConfigWithCLI(path: str) -> DictConfig:
     return OmegaConf.merge(getConfig(path), OmegaConf.from_cli())
 
 
+def formatConf(conf: DictConfig):
+    if conf.paths.model_dir:
+        conf.paths.model_dir = conf.paths.model_dir.format(date=DATE)
+    if conf.paths.log_dir:
+        conf.paths.log_dir = conf.paths.log_dir.format(date=DATE)
+    OmegaConf.set_readonly(conf, True)
+
+
 def gpus2device(gpus):
     if gpus == 0:
         return torch.device('cpu')
@@ -130,16 +148,12 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
         LightningDataModule
     """
     conf = getConfigWithCLI(conf_path)
-    kwargs = dict(
-        misc=conf.misc,
-        op_conf=conf.optimizer,
-        sg_conf=conf.scheduler,
-        branch_conf=conf.branch,
-    )
+    formatConf(conf)
 
     cosg = CoefficientScheduler(conf.coefficients, {"piter": "x", "max_epochs": "M"})
+    cosg.update(piter=0)
     net = Net(cmgr=cosg, cps=CheckpointSupport(conf.misc.memory_trade), **conf.model)
-    fsm = FSM(net, cosg, **kwargs)
+    fsm = FSM(net, cosg, conf)
 
     trainer = Trainer(conf.misc, conf.paths, conf.flag)
 
@@ -147,9 +161,11 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
         model_dir = trainer.default_root_dir
         name = conf.misc.get("load_from", "latest") + ".pth"
         path = os.path.join(model_dir, name)
-        fsm = fsm.load_from_checkpoint(path, **kwargs)
+        fsm = fsm.load_from_checkpoint(path, net=net, cmgr=cosg, conf=conf)
     else:
-        fsm.seed = int(torch.empty((), dtype=torch.int64).random_(4294967295).item())
+        fsm.seed = conf.misc.seed or int(
+            torch.empty((), dtype=torch.int64).random_(4294967295).item()
+        )
 
     pl.utilities.seed.seed_everything(fsm.seed)
 
@@ -171,27 +187,24 @@ def getTrainComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str)
 
 def getTestComponents(FSM: type[FSMBase], Net: type[nn.Module], conf_path: str):
     conf = getConfigWithCLI(conf_path)
-    kwargs = dict(
-        misc=conf.misc,
-        op_conf=conf.optimizer,
-        sg_conf=conf.scheduler,
-        branch_conf=conf.branch,
-    )
+    formatConf(conf)
 
     cosg = CoefficientScheduler(conf.coefficients, {"piter": "x", "max_epochs": "M"})
+    cosg.update(piter=0)
     net = Net(cmgr=cosg, cps=CheckpointSupport(conf.misc.memory_trade), **conf.model)
-    fsm = FSM(net, cosg, **kwargs)
+    fsm = FSM(net, cosg, conf)
 
     trainer = Trainer(conf.misc, conf.paths, conf.flag, logger_stage='test')
-    model_dir = trainer.default_root_dir
+    trainer.logger.add.append(OmegaConf.to_container(conf))
 
+    model_dir = trainer.model_dir
     path = os.path.join(model_dir, "best.pth")
     if not os.path.exists(path):
         warn(f'{path} does not exist. Will use latest.pth instead.')
         path = os.path.join(model_dir, "latest.pth")
-        assert os.path.exists(path), 'no checkpoint saved.'
+        assert os.path.exists(path), f'no checkpoint saved: {model_dir}'
 
-    fsm = fsm.load_from_checkpoint(path, **kwargs)
+    fsm = fsm.load_from_checkpoint(path, net=net, cmgr=cosg, conf=conf)
     pl.utilities.seed.seed_everything(fsm.seed)
 
     device = gpus2device(trainer.gpus)

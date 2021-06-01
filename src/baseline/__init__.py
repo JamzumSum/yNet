@@ -7,7 +7,7 @@ from misc import CheckpointSupport as CPS
 from misc import CoefficientScheduler as CSG
 from torch import Tensor
 from toynet.lossbase import CEBase, MultiTask
-from toynet.lossbase.loss import SiameseBase, TripletBase
+from toynet.lossbase.loss import ConsistencyBase, SiameseBase, TripletBase
 
 
 class BNNeckHook:
@@ -100,7 +100,7 @@ class SimBack(nn.Module, MultiTask):
         return d
 
     def __loss__(self, meta, X, Ym, reduce=True, *args, **argv):
-        r = self.forward(X, logit=True)
+        r = self.forward(X)
         if self.enable_siam:
             aX = self.aug(X)
             r2 = self.forward(aX, logit=True)
@@ -131,6 +131,8 @@ class ParalBack(SimBack, MultiBranch):
                             for k, v in kwargs.items() if k not in aname}
         )
 
+        self.dis = ConsistencyBase(cmgr, K)
+        
         isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
                                  ) or cmgr.get(f"task.{task}", 1) != 0
 
@@ -147,6 +149,7 @@ class ParalBack(SimBack, MultiBranch):
     def __loss__(self, meta, X, Ym, Yb=None, reduce=True, *args, **argv):
         r, loss = super().__loss__(meta, X, Ym, False, *args, **argv)
         loss |= self.ce(r['lm'], r['lb'], Ym, Yb)
+        loss |= self.dis(r['pm'], r['pb'])
         if reduce: loss = self.reduceLoss(loss, meta['augindices'])
         return r, loss
 

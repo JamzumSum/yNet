@@ -28,7 +28,8 @@ class MultiTask(HasLoss):
         "seg": "segment/mse",
         "pb": "b/CE",
         "tb": "b/triplet",
-        "seg_aug": 'segment/mse_aug'
+        "seg_aug": 'segment/mse_aug',
+        "sd": 'discriminator/simple'
     }
 
     def __init__(self, cmgr: CSG, aug_weight: float = 0.3333) -> None:

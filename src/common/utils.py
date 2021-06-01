@@ -107,15 +107,15 @@ class BoundingBox(nn.Module):
                 xmin.append(i.min())
                 xmax.append(i.max() + 1)
             else:
-                xmin.append(torch.zeros((), dtype=i.dtype))
-                xmax.append(torch.empty((), dtype=i.dtype).fill_(W))
+                xmin.append(torch.zeros((), dtype=i.dtype, device=i.device))
+                xmax.append(torch.empty((), dtype=i.dtype, device=i.device).fill_(W))
         for i in hmat:
             if i.shape[0]:
                 ymin.append(i.min())
                 ymax.append(i.max() + 1)
             else:
-                ymin.append(torch.zeros((), dtype=i.dtype))
-                ymax.append(torch.empty((), dtype=i.dtype).fill_(H))
+                ymin.append(torch.zeros((), dtype=i.dtype, device=i.device))
+                ymax.append(torch.empty((), dtype=i.dtype, device=i.device).fill_(H))
         
         xmin = torch.stack(xmin)
         xmax = torch.stack(xmax)

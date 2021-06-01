@@ -107,8 +107,9 @@ class BIRADsYNet(YNet, MultiBranch):
         r["lb"] = self.bfc(freeze(fi, 1))      # [N, K]
 
         if segment and (confidens := confidence(r['seg'])) >= 0.9:
-            self.fast_train = False
-            print('fast_train is switched off.')
+            if self.fast_train:
+                self.fast_train = False
+                print('fast_train is switched off.')
             r = self.ensemble(X, r, confidens)
 
         if logit: return r
@@ -162,6 +163,7 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
 
         if not self.enable_seg: self.seg.enable = False
         if not isenable('tm'): self.triplet.enable = False
+        if not isenable('sd'): self.dis.enable = False
         if self.enable_siam: self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
         if not (self.enable_seg or self.enable_sa): self.ynet.ydetach = False
 

@@ -17,28 +17,23 @@ def splitNameConf(conf, search, default_name: str = None):
 
 
 class FSMBase(pl.LightningModule, ABC):
-    Net: type[nn.Module]
-
     def __init__(
         self,
         net: nn.Module,
         cmgr: CoefficientScheduler,
-        misc: DictConfig,
-        op_conf: OmegaConf,
-        sg_conf: DictConfig,
+        conf: DictConfig,
     ):
         # UPSTREAM BUG: pl.LightningModule.__init__(self) failed with hparam saving...
         super().__init__()
 
-        self.misc = misc
-        self.op_cls, self.op_conf = splitNameConf(op_conf, torch.optim, 'SGD')
-        self.sg_cls, self.sg_conf = splitNameConf(sg_conf, torch.optim.lr_scheduler)
+        self.misc = conf.misc
+        self.op_cls, self.op_conf = splitNameConf(conf.optimizer, torch.optim, 'SGD')
+        self.sg_cls, self.sg_conf = splitNameConf(conf.scheduler, torch.optim.lr_scheduler)
 
         self.cosg = cmgr
-        self.cosg.update(piter=0)
 
         self.net = net
-        self.save_hyperparameters(ignore=['net', 'cmgr'])
+        self.save_hyperparameters(OmegaConf.to_container(conf))
 
     def traceNetwork(self):
         param = self.net.named_parameters()

@@ -26,7 +26,7 @@ data:
     BUSI: 820
     set2: 240
     set3: 340
-    # BIRADs: 210
+    BIRADs: 210
 
 # trainer flag
 flag:
@@ -46,6 +46,8 @@ misc:
 
   # use torch checkpoint to save memory on training
   memory_trade: True
+
+  seed: 3538152744
 
 optimizer:
   - AdamW
