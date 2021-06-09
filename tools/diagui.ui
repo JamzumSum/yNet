@@ -72,7 +72,7 @@
          <rect>
           <x>0</x>
           <y>0</y>
-          <width>452</width>
+          <width>93</width>
           <height>545</height>
          </rect>
         </property>
@@ -128,9 +128,12 @@
      <addaction name="actionmarkdown"/>
     </widget>
     <addaction name="actionOpen"/>
+    <addaction name="actionNew"/>
     <addaction name="menuExport"/>
     <addaction name="separator"/>
     <addaction name="menuPreference"/>
+    <addaction name="separator"/>
+    <addaction name="actionClose"/>
    </widget>
    <widget class="QMenu" name="menuFilter">
     <property name="title">
@@ -192,6 +195,22 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+D</string>
+   </property>
+  </action>
+  <action name="actionNew">
+   <property name="text">
+    <string>New Window</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+N</string>
+   </property>
+  </action>
+  <action name="actionClose">
+   <property name="text">
+    <string>Close</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+W</string>
    </property>
   </action>
  </widget>
@@ -300,6 +319,38 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>actionNew</sender>
+   <signal>triggered()</signal>
+   <receiver>WndMain</receiver>
+   <slot>newWindow()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>500</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>actionClose</sender>
+   <signal>triggered()</signal>
+   <receiver>WndMain</receiver>
+   <slot>close()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>500</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>configOpened()</slot>
@@ -308,5 +359,6 @@
   <slot>errorFilter(bool)</slot>
   <slot>exportMarkdown()</slot>
   <slot>showStatistic()</slot>
+  <slot>newWindow()</slot>
  </slots>
 </ui>

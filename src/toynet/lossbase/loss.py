@@ -44,13 +44,13 @@ class IdentityBase(LossBase):
 
 
 class SiameseBase(LossBase):
-    def __init__(self, cmgr, D, zdim: int = 2048):
+    def __init__(self, cmgr, D, zdim: int = 2048, pdim: int = 512):
         super().__init__(cmgr)
-        self.proj_mlp = MLP(D, zdim, [2048, 2048])    # L3
-        self.pred_mlp = MLP(zdim, zdim, [512], False) # L2
+        self.proj_mlp = MLP(D, zdim, [D, D])                    # L3
+        self.pred_mlp = MLP(zdim, zdim, [pdim], final_bn=False) # L2
 
     @staticmethod
-    def neg_cos_sim(p, z):
+    def neg_cos_sim(p, z: torch.Tensor):
         z = z.detach()     # stop-grad
         p = F.normalize(p, dim=1)
         z = F.normalize(z, dim=1)

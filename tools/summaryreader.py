@@ -7,7 +7,9 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 def tabulate_events(dpath):
     logs = (i for i in os.listdir(dpath) if i.startswith('events.out.tfevents'))
-    summary_iterators = [EventAccumulator(os.path.join(dpath, dname)).Reload() for dname in logs]
+    summary_iterators = [
+        EventAccumulator(os.path.join(dpath, dname)).Reload() for dname in logs
+    ]
 
     tags = summary_iterators[0].Tags()['scalars']
 
@@ -20,7 +22,7 @@ def tabulate_events(dpath):
     for tag in tags:
         steps = [e.step for e in summary_iterators[0].Scalars(tag)]
 
-        for events in zip(*[acc.Scalars(tag) for acc in summary_iterators]):
+        for events in zip(*[EA.Scalars(tag) for EA in summary_iterators]):
             assert len(set(e.step for e in events)) == 1
 
             out[tag].append([e.value for e in events])
@@ -36,9 +38,9 @@ def to_csv(dpath, outname):
     np_values = [np.array(i).flatten().tolist() for i in values]
     max_step = len(max(np_values, key=len))
 
-    for i, l in enumerate(np_values): 
+    for i, l in enumerate(np_values):
         np_values[i] = [str(j) for j in l] + [''] * (max_step - len(l))
-    
+
     with open(outname, 'w') as f:
         writeline = lambda it: f.write(','.join(it) + '\n')
         writeline(('step', *tags))
@@ -55,5 +57,5 @@ def get_file_path(dpath, tag):
 
 
 if __name__ == '__main__':
-    path = "./log/resnet34/0117"
-    to_csv(path, './log/resnet34/0117/scalar.csv')
+    path = "E:/Desktop/log/0601/ynet/detach"
+    to_csv(path, 'E:/Desktop/0601-ynet-detach.csv')

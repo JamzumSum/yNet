@@ -2,7 +2,8 @@ import: ./base.yml
 
 model:
   in_channel: 1
-  K: 3 # 2, 3, 4a, 4b, 4c, 5
+  # BIRADS: 2, 3, 4a, 4b, 4c, 5
+  K: 3 
   width: 16
 
   # for (512, 512) image, unet level + ypath level <= 8
@@ -14,10 +15,20 @@ model:
   # use anti-alias pooling when downsampling
   antialias: True
 
+  # padding mode like that in tf.
   padding_mode: same
 
   # whether to use ensemble in training. bool.
   ensemble_mode: add
+
+  # use residual connection in CBR module
+  residual: True
+
+  # like that in resnet. use with `residual` switched on
+  zero_init_residual: True
+
+  # what norm layer to use. `batchnorm`/`groupnorm`.
+  norm: batchnorm
 
 # branch is used to control behaviors of diverse param groups.
 # args here will override those in optimizer and scheduler

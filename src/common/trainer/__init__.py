@@ -30,11 +30,11 @@ class Trainer(pl.Trainer):
     ):
         self.misc = misc
         self.paths = paths
+        self.version = self.paths.name
 
         tb = self._getLogger(logger_stage)
-        checkpoint_callback = self._getCheckpointCallback(
-            tb.version or self.version, logger_stage
-        )
+        self.version = tb.version or self.version
+        checkpoint_callback = self._getCheckpointCallback(self.version, logger_stage)
         pl.Trainer.__init__(
             self,
             callbacks=[checkpoint_callback, RichProgressBar()],
@@ -50,10 +50,6 @@ class Trainer(pl.Trainer):
     @property
     def name(self):
         return self.paths.name
-
-    @property
-    def version(self) -> str:
-        return self.paths.version
 
     def _getLogger(self, stage=None):
         log_dir = self.paths.get("log_dir", f'log/{DATE}')

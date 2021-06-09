@@ -16,8 +16,6 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
     """
     Generate embedding and segment of an image.
     """
-    ydetach = True
-
     def __init__(
         self,
         cps: CheckpointSupport,
@@ -75,7 +73,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
                 ylayers.append(cps(ConvStack2(cc, cc, **uniarg)))
             else:
                 ylayers.append(cps(ConvStack2(cc, 2 * cc, **uniarg)))
-                ylayers.append(DownConv(2 * cc, blur=antialias))
+                ylayers.append(DownConv(2 * cc, blur=False))
             cc = ylayers[-1].oc
         self.yoc = cc
         self.ypath = nn.Sequential(*ylayers)
@@ -124,3 +122,7 @@ class YNet(nn.Module, SegmentSupported, SelfInitialed):
         r["ft"] = self.pool(c).flatten(1)      # [N, D], D = fc * 2^(ul + yl)
         r["ft_d"] = self.pool(cd).flatten(1)
         return r
+
+    @property
+    def backbone_only(self):
+        return self.unet.backbone_only

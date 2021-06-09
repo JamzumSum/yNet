@@ -94,13 +94,14 @@ class BIRADsYNet(YNet, MultiBranch):
         # BNNeck below.
         # See: A Strong Baseline and Batch Normalization Neck for Deep Person Re-identification
         # Use ft to calculate triplet, etc.; use fi to classify.
+        segment = not self.backbone_only and segment
         r = YNet.forward(
-            self, X, segment or not (self.fast_train and self.training), classify
+            self, X, segment or not (self.fast_train and self.training or self.backbone_only), classify
         )
         if not classify:
             return r
 
-        fi = self.norm_layer(r['ft_d'] if self.ydetach else r['ft'])
+        fi = self.norm_layer(r['ft'] if self.backbone_only else r['ft_d'])
         r["fi"] = fi       # [N, D], empirically, D >= 128
 
         r["lm"] = self.mfc(fi)                 # [N, 2]
@@ -136,10 +137,23 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         smooth=0.,
         **kwargs
     ):
+        isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
+                                 ) or cmgr.get(f"task.{task}", 1) != 0
+        assert isenable('pm')
+        self.enable_seg = isinstance(self, SegmentSupported) and isenable('seg')
+        self.enable_sa = isinstance(self, SegmentSupported) and isenable('seg_aug')
+        self.enable_siam = isenable('sim')
+
         nn.Module.__init__(self)
         MultiTask.__init__(self, cmgr, aug_weight)
         self.cps = cps
-        self.ynet = BIRADsYNet(cps, in_channel, *args, **kwargs)
+        self.ynet = BIRADsYNet(
+            cps,
+            in_channel,
+            *args,
+            backbone_only=not (self.enable_seg or self.enable_sa),
+            **kwargs
+        )
         # online augment
         if aug_conf is None: aug_conf = {}
         self.aug = RandomAffine(
@@ -153,19 +167,10 @@ class ToyNetV1(nn.Module, SegmentSupported, MultiBranch, MultiTask):
         self.triplet = TripletBase(cmgr, True)
         self.seg = MSESegBase(cmgr)
 
-        isenable = lambda task: (not cmgr.isConstant(f'task.{task}')
-                                 ) or cmgr.get(f"task.{task}", 1) != 0
-
-        assert isenable('pm')
-        self.enable_seg = isinstance(self, SegmentSupported) and isenable('seg')
-        self.enable_sa = isinstance(self, SegmentSupported) and isenable('seg_aug')
-        self.enable_siam = isenable('sim')
-
         if not self.enable_seg: self.seg.enable = False
         if not isenable('tm'): self.triplet.enable = False
         if not isenable('sd'): self.dis.enable = False
         if self.enable_siam: self.siamese = SiameseBase(cmgr, self.ynet.yoc, zdim)
-        if not (self.enable_seg or self.enable_sa): self.ynet.ydetach = False
 
     def forward(self, *args, **kwargs):
         return self.ynet.forward(*args, **kwargs)

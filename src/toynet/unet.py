@@ -154,6 +154,7 @@ class BareUNet(ChannelInference):
     fc: int
     cps: CheckpointSupport
     cat: bool
+    backbone_only: bool
 
     def __init__(
         self,
@@ -167,6 +168,7 @@ class BareUNet(ChannelInference):
         transConv=False,
         padding_mode='none',
         antialias=True,
+        backbone_only=False,
         cat=True,
     ):
         super().__init__(ic, fc * 2 ** level)
@@ -182,6 +184,8 @@ class BareUNet(ChannelInference):
             cc = conv.oc
             self.add_module(f"D{i + 1}", dsample)
             self.add_module(f"L{i + 2}", conv)
+
+        if backbone_only: return
 
         for i in range(level):
             usample = UpConv(cc, norm=norm, transConv=transConv)
@@ -267,12 +271,13 @@ class UNet(BareUNet):
     def __init__(self, ic, oc, level=4, fc=64, *, headeroc=None, **kwargs):
         super().__init__(ic, level, fc, **kwargs)
         headers = [nn.Sequential(nn.Conv2d(fc, oc, 1), nn.Sigmoid())]
-        if headeroc:
+        if not self.backbone_only and headeroc:
             headers.extend(
                 nn.Sequential(nn.Tanh(), nn.Conv2d(fc, oc, 1), nn.Sigmoid())
                 for oc in headeroc
             )
-        self.headers = ParallelLayers(headers, None)
+        if not self.backbone_only:
+            self.headers = ParallelLayers(headers, None)
 
     @staticmethod
     def padback(X, shape):
@@ -282,6 +287,8 @@ class UNet(BareUNet):
         return F.pad(X, [left // 2, left - left // 2, top // 2, top - top // 2])
 
     def forward(self, X, expand: bool = True) -> dict:
+        assert not (expand and self.backbone_only)
+        
         bottomx, finalx = super().forward(X, expand)
         d = {"bottom": bottomx}
         if not expand:

@@ -3,8 +3,9 @@ from typing import Iterable
 import torch
 import torch.nn.functional as F
 from common.decorators import d3support
-from . import affine
+from torchvision import transforms
 
+from . import affine
 
 class RandomAffine(torch.nn.Module):
     def __init__(self, degrees, translate=None, scale=None):
@@ -43,8 +44,8 @@ class RandomAffine(torch.nn.Module):
             params to be passed to the affine transformation
         """
         angle = float(
-            torch.empty(1).uniform_(float(degrees[0]),
-                                    float(degrees[1])).item())
+            torch.empty(1).uniform_(float(degrees[0]), float(degrees[1])).item()
+        )
         if translate is not None:
             max_dx = float(translate[0])
             max_dy = float(translate[1])
@@ -56,8 +57,8 @@ class RandomAffine(torch.nn.Module):
 
         if scale_ranges is not None:
             scale = float(
-                torch.empty(1).uniform_(scale_ranges[0],
-                                        scale_ranges[1]).item())
+                torch.empty(1).uniform_(scale_ranges[0], scale_ranges[1]).item()
+            )
         else:
             scale = 1.0
         return angle, translations, scale
@@ -69,3 +70,22 @@ class RandomAffine(torch.nn.Module):
             self.scale,
         )
         return affine(img, dx, dy, scale, angle)
+
+
+class RandomSimple(transforms.Compose):
+    def __init__(self, size=512):
+        super().__init__([
+            transforms.RandomResizedCrop(size, scale=(0.2, 1.)),
+            transforms.RandomHorizontalFlip(),
+        ])
+
+    def __call__(self, *img):
+        if len(img) == 0:
+            raise ValueError
+        elif len(img) == 1:
+            return super().__call__(img[0])
+
+        N = [i.size(0) for i in img]
+        img = torch.cat(img, 0)
+        r = super().__call__(img)
+        return torch.split(r, N)

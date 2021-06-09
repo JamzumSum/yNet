@@ -12,6 +12,8 @@ from tools.chart import CMPieChartView, PRBarChartView
 from tools.common import *
 from tools.compile.diagui import Ui_WndMain
 
+wHolder = []
+
 
 class PIDSolver:
     suffix = ('jpg', 'png', 'bmp')
@@ -33,12 +35,13 @@ class DiaGUI(QMainWindow):
     thresh = 0.5
     filter = False
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, index=0) -> None:
         super().__init__(parent=parent)
         self.ui = Ui_WndMain()
         self.ui.setupUi(self)
         self.ui.retranslateUi(self)
 
+        self._index = index
         self.solver = PIDSolver()
         self.__post_init__()
 
@@ -48,7 +51,7 @@ class DiaGUI(QMainWindow):
         self.ui.bcv = PRBarChartView('BI-RADS', BIRAD_MAP)
         self.ui.mcv = PRBarChartView('B/M', ['benign', 'malignant'])
         self.ui.bpie = CMPieChartView(
-            'BI-RADS Confusion Matrix', [f"BIRADS-{i}" for i in BIRAD_MAP]
+            'BI-RADS Precision PieChart', [f"BIRADS-{i}" for i in BIRAD_MAP]
         )
         self.ui.scrollContent.addWidget(self.ui.bcv)
         self.ui.scrollContent.addWidget(self.ui.mcv)
@@ -56,7 +59,7 @@ class DiaGUI(QMainWindow):
 
     def configOpened(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, 'Select raw result', './log', "raw results (*.yml *.yaml)"
+            self, 'Select raw result', filter="raw results (*.yml *.yaml)"
         )
         if not path: return
         with open(path) as f:
@@ -64,8 +67,9 @@ class DiaGUI(QMainWindow):
             self.raw = {k: DiagBag(**v) for k, v in raw.items()}
 
         self.counter = Counter(self.raw.values(), self.thresh)
-        self.conf_name = os.path.split(path)[-1]
-        self.setWindowTitle(f'DiagUI: {self.conf_name}')
+        conf_path = conf.get('paths', {}) if conf else {}
+        self.conf_name = f"{conf_path.get('name', '')}/{conf_path.get('version', os.path.split(path)[-1])}"
+        self.setWindowTitle(f"DiagUI: {self.conf_name}")
         self.refreshTable()
 
     def refreshTable(self):
@@ -140,6 +144,14 @@ class DiaGUI(QMainWindow):
         self.ui.bcv.refresh(self.counter.pb_precision, self.counter.pb_recall)
         self.ui.mcv.refresh(self.counter.pm_precision, self.counter.pm_recall)
         self.ui.bpie.refresh(self.counter.cb)
+
+    def newWindow(self):
+        wHolder.append(gui := DiaGUI(index=len(wHolder)))
+        gui.show()
+
+    def closeEvent(self, event=None) -> None:
+        wHolder[self._index] = None
+        return super().closeEvent(event)
 
 
 if __name__ == "__main__":

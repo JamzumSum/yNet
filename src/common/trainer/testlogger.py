@@ -9,12 +9,11 @@ from data.dataset.cacheset import DataMeta
 
 
 class TestLogger(LightningLoggerBase):
-    def __init__(self, save_dir, name='default', version=None, prefix=''):
+    def __init__(self, save_dir, name='default', version: str = None, prefix=''):
         super().__init__()
-        self.f = os.path.join(
-            save_dir, name,
-            prefix + ('test_raw.yml' if version is None else f'{version}.yml')
-        )
+        f = os.path.join(save_dir, name,
+                         version) if version else os.path.join(save_dir, name)
+        self.f = os.path.join(f, prefix + f'{name}-{version}.yml')
         self._d = {}
         self.add = []
 

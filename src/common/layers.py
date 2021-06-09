@@ -70,13 +70,13 @@ class MLP(nn.Sequential):
         layers = []
         cc = ic
         for i in hidden_layers:
-            layers.append(nn.Linear(cc, i))
+            layers.append(nn.Linear(cc, i, bias=False))
             layers.append(nn.BatchNorm1d(i))
             layers.append(nn.ReLU())
             cc = i
         layers.append(nn.Linear(cc, oc))
         if final_bn:
-            layers.append(nn.BatchNorm1d(cc))
+            layers.append(nn.BatchNorm1d(oc, affine=False))
         if final_relu:
             layers.append(nn.ReLU())
         super().__init__(*layers)
@@ -91,10 +91,9 @@ class BlurPool(nn.Module):
     '''
     https://github.com/adobe/antialiased-cnns/blob/d4bf038a24cb2cdeae721ccaeeb1bd0c81c8dff7/antialiased_cnns/blurpool.py#L13
     '''
-    def __init__(self, channels, pad_type='reflect', filt_size=4, stride=2, pad_off=0):
+    def __init__(self, channels, pad_type='reflect', filt_size=3, stride=2, pad_off=0):
         super(BlurPool, self).__init__()
         self.filt_size = filt_size
-        self.pad_off = pad_off
 
         self.stride = stride
         self.off = int((self.stride - 1) / 2.)

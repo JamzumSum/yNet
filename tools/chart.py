@@ -1,10 +1,12 @@
 from PySide2.QtCore import QEasingCurve
+from PySide2.QtGui import QColor
 from PySide2.QtWidgets import QSizePolicy
 from qtpy.QtCharts import QtCharts
 import torch
 
 from tools.common import BIRAD_MAP
 
+COLOR = ['#6abfea', '#99ca53', '#f6a625', '#6abfea', '#30401a']
 
 class BaseChartView(QtCharts.QChartView):
     def __init__(self, title: str, axis: list) -> None:
@@ -57,7 +59,9 @@ class CMPieChartView(BaseChartView):
 
     def refresh(self, cm: torch.LongTensor):
         K = len(cm)
+        color = [QColor(j) for j in COLOR[:K]]
         self.chart().removeAllSeries()
+        
         for i in range(K):
             series = QtCharts.QPieSeries()
             series.setName(f'{i}')
@@ -67,6 +71,7 @@ class CMPieChartView(BaseChartView):
             for j in range(K):
                 if (v := cm[i, j]):
                     series.append(f"pred as {BIRAD_MAP[j]}", v)
+                    series.slices()[-1].setColor(color[j])
 
             series.setLabelsVisible(True)
             self.chart().addSeries(series)

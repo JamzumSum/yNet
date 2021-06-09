@@ -10,3 +10,5 @@
 
 /yapf_style.cfg
 /.pylintrc
+
+!data\README.md
