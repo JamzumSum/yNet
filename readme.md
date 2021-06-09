@@ -33,7 +33,7 @@ Here is an example of compiling BUSI using vscode task:
 
 ### training
 
-We recommond to train yNet on a GPU with __18000M free memory__. Our implement uses RTX3090. 
+We recommend to train yNet on a GPU with __18000M free memory__. Our implement uses RTX3090. 
 
 Multi-processing is not implemented. So DDP isn't available. We warn of using DP directly, since triplet loss and BN are used. 
 Fork is welcomed.
@@ -41,5 +41,7 @@ Fork is welcomed.
 ~~~ shell
 python3.9 src/train_toynetv1.py # paths.version=QAQ
 ~~~
+
+You may need to edit `.env` on Linux.
 
 @import "./data/README.md"
