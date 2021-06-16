@@ -17,7 +17,7 @@ yNet: A Breast Ultrasound Image Classification Algorithm Based on Metric Learnin
 
 See scripts in `src/data/script` for detail.
 
-Here is an example of compiling BUSI using vscode task:
+Here is an example of compiling [BUSI](https://doi.org/10.1016/j.dib.2019.104863) using vscode task:
 ~~~ json
 {
     "label": "make dataset: BUSI", 
@@ -43,5 +43,3 @@ python3.9 src/train_toynetv1.py # paths.version=QAQ
 ~~~
 
 You may need to edit `.env` on Linux.
-
-@import "./data/README.md"

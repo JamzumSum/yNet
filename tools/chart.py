@@ -8,6 +8,7 @@ from tools.common import BIRAD_MAP
 
 COLOR = ['#6abfea', '#99ca53', '#f6a625', '#6abfea', '#30401a']
 
+
 class BaseChartView(QtCharts.QChartView):
     def __init__(self, title: str, axis: list) -> None:
         chart = QtCharts.QChart()
@@ -39,8 +40,13 @@ class PRBarChartView(BaseChartView):
         rec = QtCharts.QBarSet('recall')
         pre.append(p)
         rec.append(r)
+        pre.setLabelColor(QColor('#000000'))
+        rec.setLabelColor(QColor('#000000'))
 
         series = QtCharts.QBarSeries()
+        series.setLabelsVisible(True)
+        series.setLabelsPosition(QtCharts.QAbstractBarSeries.LabelsOutsideEnd)
+        series.setLabelsPrecision(4)
         series.append(pre)
         series.append(rec)
 
@@ -48,6 +54,36 @@ class PRBarChartView(BaseChartView):
         self.chart().addSeries(series)
         self.chart().setAxisX(self.xa, series)
         self.chart().setAxisY(self.ya, series)
+
+        self.setVisible(True)
+
+
+class FallacyBarView(BaseChartView):
+    def __init__(self, title: str, axis: list) -> None:
+        super().__init__(title, ['benign', 'malignant'])
+        self.axis = axis
+        self.ya = QtCharts.QValueAxis()
+
+    @property
+    def K(self):
+        return len(self.axis)
+
+    def refresh(self, B, M):
+        sets = [QtCharts.QBarSet(i) for i in self.axis]
+        for s, b, m in zip(sets, B, M):
+            s.append([b, m])
+            s.setLabelColor(QColor('black'))
+
+        series = QtCharts.QBarSeries()
+        series.setLabelsVisible(True)
+        series.setLabelsPosition(QtCharts.QAbstractBarSeries.LabelsOutsideEnd)
+        series.append(sets)
+
+        self.chart().removeAllSeries()
+        self.chart().addSeries(series)
+        self.chart().setAxisX(self.xa, series)
+        self.chart().setAxisY(self.ya, series)
+        self.ya.setRange(0, max(B + M))
 
         self.setVisible(True)
 
@@ -61,7 +97,7 @@ class CMPieChartView(BaseChartView):
         K = len(cm)
         color = [QColor(j) for j in COLOR[:K]]
         self.chart().removeAllSeries()
-        
+
         for i in range(K):
             series = QtCharts.QPieSeries()
             series.setName(f'{i}')

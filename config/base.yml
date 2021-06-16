@@ -8,7 +8,7 @@ model:
 # dynamic coefficients including multi-task loss
 coefficients:
   # margin when calculating triplet loss
-  margin: 0.3 # + 0.5 * x ** 2
+  margin: 0.3 + 0.5 * x ** 2
 
   # multi-task factors
   task:

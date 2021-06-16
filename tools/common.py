@@ -13,15 +13,6 @@ BIRAD_MAP = ['2', '3', '4', '5']
 def _lbm():
     global BIRAD_MAP
     BIRAD_MAP = torch.load("./data/BIRADs/meta.pt")['classname']['Yb']
-    # i2a = defaultdict(list)
-    # for k, v in a2i.items():
-    #     i2a[v].append(k)
-    # del a2i
-    # for k, v in i2a:
-    #     v = ','.join(v)
-    #     i2a[k] = '4' if v == '4a,4b,4c' else v
-    # BIRAD_MAP = i2a
-
 
 @dataclass(frozen=True)
 class DiagBag:
@@ -50,19 +41,24 @@ class Counter:
     def __init__(self, diags: Iterable[DiagBag], thresh: float) -> None:
         self.raw = tuple(diags)
         self.K = len(BIRAD_MAP)
+        assert self.K >= 2
+
         self.allInOne(thresh)
 
     def allInOne(self, thresh):
         cm = ConfusionMatrix(2, threshold=thresh)
         cb = ConfusionMatrix(self.K)
+        cbm = ConfusionMatrix(self.K)
 
         for d in self.raw:
             cm.update(preds=torch.Tensor([d.pm]), target=torch.LongTensor([d.ym]))
+            cbm.update(preds=torch.Tensor([d.pb]), target=torch.LongTensor([int(d.pm > thresh)]))
             if d.yb is not None:
                 cb.update(preds=torch.Tensor([d.pb]), target=torch.LongTensor([[d.yb]]))
 
         self.cm = cm.compute()
         self.cb = cb.compute()
+        self.cbm = cbm.compute()
 
     @staticmethod
     def _acc(cf):
@@ -99,6 +95,14 @@ class Counter:
     @property
     def pm_recall(self):
         return self._recall(self.cm)
+
+    @property
+    def m_birad(self):
+        return self.cbm[1].int().tolist()
+
+    @property
+    def b_birad(self):
+        return self.cbm[0].int().tolist()
 
 
 _lbm()

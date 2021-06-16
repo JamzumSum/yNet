@@ -8,7 +8,7 @@ from PySide2.QtGui import QDesktopServices
 from PySide2.QtWidgets import QAbstractItemView, QFileDialog, QInputDialog
 from qtpy.QtWidgets import QApplication, QMainWindow
 
-from tools.chart import CMPieChartView, PRBarChartView
+from tools.chart import CMPieChartView, FallacyBarView, PRBarChartView
 from tools.common import *
 from tools.compile.diagui import Ui_WndMain
 
@@ -53,8 +53,10 @@ class DiaGUI(QMainWindow):
         self.ui.bpie = CMPieChartView(
             'BI-RADS Precision PieChart', [f"BIRADS-{i}" for i in BIRAD_MAP]
         )
+        self.ui.bfc = FallacyBarView('Fallacy of predicts', [f"BIRADS-{i}" for i in BIRAD_MAP])
         self.ui.scrollContent.addWidget(self.ui.bcv)
         self.ui.scrollContent.addWidget(self.ui.mcv)
+        self.ui.scrollContent.addWidget(self.ui.bfc)
         self.ui.scrollContent.addWidget(self.ui.bpie)
 
     def configOpened(self):
@@ -143,6 +145,7 @@ class DiaGUI(QMainWindow):
     def showStatistic(self):
         self.ui.bcv.refresh(self.counter.pb_precision, self.counter.pb_recall)
         self.ui.mcv.refresh(self.counter.pm_precision, self.counter.pm_recall)
+        self.ui.bfc.refresh(self.counter.b_birad, self.counter.m_birad)
         self.ui.bpie.refresh(self.counter.cb)
 
     def newWindow(self):
@@ -150,7 +153,7 @@ class DiaGUI(QMainWindow):
         gui.show()
 
     def closeEvent(self, event=None) -> None:
-        wHolder[self._index] = None
+        if self._index: wHolder[self._index] = None
         return super().closeEvent(event)
 
 

@@ -13,12 +13,15 @@ setup(
     url='https://github.com/JamzumSum/yNet',
     python_requires=">=3.9",
     install_requires=[
-        'python >= 3.9'
         'torch >= 1.7'
-        'pytorch-lightning >= 1.3.0',
+        'pytorch-lightning == 1.3.1',
         'opencv-python',
         'rich',
         'omegaconf',
+        'indexserial',
+    ],
+    dependency_links=[
+        'https://github.com/JamzumSum/IndexSerializer/releases/download/1.1.0/indexserial-1.1.0-py3-none-any.whl'
     ],
     packages=find_packages(where='src'),
     package_dir={"": "src"},
